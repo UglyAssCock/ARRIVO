@@ -8,6 +8,49 @@ enum PackageStatus {
   notFound,
 }
 
+class UserAccount {
+  final String email;
+  final String displayName;
+  final String authProvider; // 'google' or 'email'
+  final String syncId;
+  final DateTime lastSyncedAt;
+
+  const UserAccount({
+    required this.email,
+    required this.displayName,
+    required this.authProvider,
+    required this.syncId,
+    required this.lastSyncedAt,
+  });
+
+  UserAccount copyWith({DateTime? lastSyncedAt}) {
+    return UserAccount(
+      email: email,
+      displayName: displayName,
+      authProvider: authProvider,
+      syncId: syncId,
+      lastSyncedAt: lastSyncedAt ?? this.lastSyncedAt,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'email': email,
+        'displayName': displayName,
+        'authProvider': authProvider,
+        'syncId': syncId,
+        'lastSyncedAt': lastSyncedAt.toIso8601String(),
+      };
+
+  factory UserAccount.fromJson(Map<String, dynamic> json) => UserAccount(
+        email: json['email'] ?? '',
+        displayName: json['displayName'] ?? 'User',
+        authProvider: json['authProvider'] ?? 'email',
+        syncId: json['syncId'] ?? '',
+        lastSyncedAt:
+            DateTime.tryParse(json['lastSyncedAt'] ?? '') ?? DateTime.now(),
+      );
+}
+
 class TrackingEvent {
   final String title;
   final String timestamp;
@@ -45,107 +88,320 @@ class CarrierInfo {
   final String name;
   final int track17Code;
   final String region;
+  final String trackingUrlTemplate;
 
   const CarrierInfo({
     required this.id,
     required this.name,
     required this.track17Code,
     required this.region,
+    required this.trackingUrlTemplate,
   });
+
+  String buildLiveTrackingUrl(String trackingNumber) {
+    final clean = Uri.encodeComponent(trackingNumber.trim());
+    return trackingUrlTemplate.replaceAll('{num}', clean);
+  }
 }
 
 class CarrierRegistry {
   static const List<CarrierInfo> carriers = [
     CarrierInfo(
       id: 'auto',
-      name: 'Auto-Detect Carrier',
+      name: 'Auto-Detect (All 2,400+ Couriers)',
       track17Code: 0,
-      region: 'Global & Algeria',
+      region: 'Worldwide & Local',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
     ),
+    // Algerian Local & National Couriers
     CarrierInfo(
       id: 'yalidine',
       name: 'Yalidine Express',
       track17Code: 100592,
-      region: 'Algeria (Local)',
+      region: 'Algeria',
+      trackingUrlTemplate: 'https://yalidine.com/suivre-un-colis/?tracking={num}',
     ),
     CarrierInfo(
       id: 'zrexpress',
       name: 'ZR Express',
       track17Code: 100791,
-      region: 'Algeria (Local)',
+      region: 'Algeria',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    CarrierInfo(
+      id: 'maystro',
+      name: 'Maystro Delivery',
+      track17Code: 0,
+      region: 'Algeria',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    CarrierInfo(
+      id: 'guepex',
+      name: 'Guepex Express',
+      track17Code: 0,
+      region: 'Algeria',
+      trackingUrlTemplate: 'https://guepex.com/suivre-un-colis/?tracking={num}',
+    ),
+    CarrierInfo(
+      id: 'noest',
+      name: 'Nord et Ouest Express (NOEST)',
+      track17Code: 0,
+      region: 'Algeria',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
     ),
     CarrierInfo(
       id: 'algerie_poste',
-      name: 'Algérie Poste / EMS',
+      name: 'Algérie Poste / EMS Champion Post',
       track17Code: 3011,
       region: 'Algeria & International',
+      trackingUrlTemplate: 'https://www.ems.dz/track/?tracking={num}',
+    ),
+    // E-Commerce & Asian Logistics
+    CarrierInfo(
+      id: 'cainiao',
+      name: 'Cainiao / AliExpress Standard',
+      track17Code: 190008,
+      region: 'Global E-Commerce',
+      trackingUrlTemplate: 'https://global.cainiao.com/newDetail.htm?mailNoList={num}',
     ),
     CarrierInfo(
+      id: 'china_post',
+      name: 'China Post (ePacket / Registered)',
+      track17Code: 3011,
+      region: 'China & Worldwide',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    CarrierInfo(
+      id: 'yanwen',
+      name: 'Yanwen Logistics',
+      track17Code: 190012,
+      region: 'International E-Commerce',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    CarrierInfo(
+      id: 'sunyou',
+      name: 'SunYou (Sypost)',
+      track17Code: 190074,
+      region: 'International E-Commerce',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    CarrierInfo(
+      id: '4px',
+      name: '4PX Worldwide Express',
+      track17Code: 190002,
+      region: 'International E-Commerce',
+      trackingUrlTemplate: 'https://track.4px.com/#/result/0/{num}',
+    ),
+    CarrierInfo(
+      id: 'yunexpress',
+      name: 'YunExpress',
+      track17Code: 190009,
+      region: 'International E-Commerce',
+      trackingUrlTemplate: 'https://www.yuntrack.com/parcelTracking?id={num}',
+    ),
+    CarrierInfo(
+      id: 'temu',
+      name: 'Temu Logistics',
+      track17Code: 0,
+      region: 'Global E-Commerce',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    CarrierInfo(
+      id: 'shein',
+      name: 'Shein Express',
+      track17Code: 0,
+      region: 'Global E-Commerce',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    CarrierInfo(
+      id: 'speedaf',
+      name: 'Speedaf Express',
+      track17Code: 190441,
+      region: 'Africa, MENA & Asia',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    CarrierInfo(
+      id: 'jt_express',
+      name: 'J&T Express',
+      track17Code: 100279,
+      region: 'MENA, Asia & Global',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    // Major International Couriers
+    CarrierInfo(
       id: 'dhl',
-      name: 'DHL Express',
+      name: 'DHL Express / eCommerce',
       track17Code: 100001,
-      region: 'International',
+      region: 'Worldwide',
+      trackingUrlTemplate: 'https://www.dhl.com/en/express/tracking.html?AWB={num}',
+    ),
+    CarrierInfo(
+      id: 'ups',
+      name: 'UPS',
+      track17Code: 100002,
+      region: 'Worldwide',
+      trackingUrlTemplate: 'https://www.ups.com/track?tracknum={num}',
+    ),
+    CarrierInfo(
+      id: 'fedex',
+      name: 'FedEx',
+      track17Code: 100003,
+      region: 'Worldwide',
+      trackingUrlTemplate: 'https://www.fedex.com/fedextrack/?trknbr={num}',
     ),
     CarrierInfo(
       id: 'aramex',
       name: 'Aramex',
       track17Code: 100006,
-      region: 'MENA & International',
+      region: 'MENA & Worldwide',
+      trackingUrlTemplate: 'https://www.aramex.com/us/en/track/results?ShipmentNumber={num}',
     ),
     CarrierInfo(
-      id: 'aliexpress',
-      name: 'AliExpress / Cainiao',
-      track17Code: 190008,
-      region: 'E-Commerce',
+      id: 'tnt',
+      name: 'TNT Express',
+      track17Code: 100004,
+      region: 'Worldwide',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
     ),
     CarrierInfo(
-      id: 'temu',
-      name: 'Temu Logistics',
-      track17Code: 190911,
-      region: 'E-Commerce',
+      id: 'dpd',
+      name: 'DPD Group',
+      track17Code: 100007,
+      region: 'Europe & Worldwide',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
     ),
     CarrierInfo(
-      id: 'shein',
-      name: 'Shein Express',
-      track17Code: 190271,
-      region: 'E-Commerce',
+      id: 'gls',
+      name: 'GLS',
+      track17Code: 100005,
+      region: 'Europe & North America',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    // National Postal Services
+    CarrierInfo(
+      id: 'laposte',
+      name: 'La Poste / Colissimo / Chronopost',
+      track17Code: 6051,
+      region: 'France & International',
+      trackingUrlTemplate: 'https://www.laposte.fr/outils/suivre-vos-envois?code={num}',
+    ),
+    CarrierInfo(
+      id: 'royal_mail',
+      name: 'Royal Mail / Parcelforce',
+      track17Code: 11031,
+      region: 'United Kingdom',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    CarrierInfo(
+      id: 'usps',
+      name: 'USPS (United States Postal Service)',
+      track17Code: 21051,
+      region: 'United States',
+      trackingUrlTemplate: 'https://tools.usps.com/go/TrackConfirmAction?tLabels={num}',
+    ),
+    CarrierInfo(
+      id: 'canada_post',
+      name: 'Canada Post',
+      track17Code: 3041,
+      region: 'Canada',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    CarrierInfo(
+      id: 'singapore_post',
+      name: 'Singapore Post (SingPost)',
+      track17Code: 19011,
+      region: 'Singapore & Worldwide',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    CarrierInfo(
+      id: 'postnl',
+      name: 'PostNL',
+      track17Code: 14041,
+      region: 'Netherlands & Worldwide',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    CarrierInfo(
+      id: 'ptt_turkey',
+      name: 'PTT Kargo (Turkish Post)',
+      track17Code: 20101,
+      region: 'Turkey & Worldwide',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
+    ),
+    CarrierInfo(
+      id: 'emirates_post',
+      name: 'Emirates Post',
+      track17Code: 1021,
+      region: 'UAE & Worldwide',
+      trackingUrlTemplate: 'https://t.17track.net/en#nums={num}',
     ),
   ];
 
   static CarrierInfo detectCarrier(String rawNumber) {
     final code = rawNumber.trim().toUpperCase();
+    if (code.isEmpty) return byId('auto');
+
     if (code.startsWith('YAL') || code.startsWith('YD')) {
       return byId('yalidine');
     }
     if (code.startsWith('ZR') || code.startsWith('ZRE')) {
       return byId('zrexpress');
     }
-    if (code.endsWith('DZ') ||
-        code.startsWith('EE') ||
-        code.startsWith('RR') ||
-        code.startsWith('CP')) {
+    if (code.startsWith('MAY') || code.startsWith('MSD')) {
+      return byId('maystro');
+    }
+    if (code.startsWith('GPX') || code.startsWith('GUE')) {
+      return byId('guepex');
+    }
+    if (code.endsWith('DZ')) {
       return byId('algerie_poste');
-    }
-    if (code.startsWith('JJD') ||
-        code.startsWith('DHL') ||
-        RegExp(r'^\d{10}$').hasMatch(code)) {
-      return byId('dhl');
-    }
-    if (code.startsWith('ARX') || RegExp(r'^\d{11}$').hasMatch(code)) {
-      return byId('aramex');
     }
     if (code.startsWith('LP') ||
         code.startsWith('CAINIAO') ||
+        code.startsWith('CN') ||
         code.endsWith('CN')) {
-      return byId('aliexpress');
+      return byId('cainiao');
     }
-    if (code.startsWith('TMU') || code.startsWith('TEMU')) {
-      return byId('temu');
+    if (code.startsWith('YT') && code.length >= 16) {
+      return byId('yunexpress');
     }
-    if (code.startsWith('SHN') || code.startsWith('SHEIN')) {
-      return byId('shein');
+    if (code.startsWith('VR') ||
+        code.startsWith('UG') ||
+        code.startsWith('UY')) {
+      return byId('yanwen');
     }
-    return byId('algerie_poste');
+    if (code.startsWith('SY')) {
+      return byId('sunyou');
+    }
+    if (code.startsWith('4PX')) {
+      return byId('4px');
+    }
+    if (code.startsWith('1Z')) {
+      return byId('ups');
+    }
+    if (code.startsWith('JJD') ||
+        code.startsWith('DHL') ||
+        code.startsWith('GM')) {
+      return byId('dhl');
+    }
+    if (code.endsWith('FR') || code.startsWith('6A') || code.startsWith('8R')) {
+      return byId('laposte');
+    }
+    if (code.endsWith('SG') || code.endsWith('NL')) {
+      return code.endsWith('SG') ? byId('singapore_post') : byId('postnl');
+    }
+    if (code.endsWith('TR')) {
+      return byId('ptt_turkey');
+    }
+    if (code.startsWith('94') ||
+        code.startsWith('92') ||
+        code.startsWith('93')) {
+      return byId('usps');
+    }
+    if (RegExp(r'^[A-Z]{2}\d{9}[A-Z]{2}$').hasMatch(code)) {
+      // Universal Postal Union S10 international EMS/Registered format
+      return byId('algerie_poste');
+    }
+    return byId('auto');
   }
 
   static CarrierInfo byId(String id) {
@@ -233,11 +489,11 @@ class PackageItem {
       id: json['id'] ?? '',
       trackingNumber: json['trackingNumber'] ?? '',
       customName: json['customName'] ?? 'Package',
-      carrierId: json['carrierId'] ?? 'algerie_poste',
+      carrierId: json['carrierId'] ?? 'auto',
       status: status,
-      eta: json['eta'] ?? 'Oct 31, 2026 • 6:00 PM',
-      origin: json['origin'] ?? 'Algiers Hub',
-      destination: json['destination'] ?? 'Oran, Algeria',
+      eta: json['eta'] ?? 'In Transit',
+      origin: json['origin'] ?? 'Origin Hub',
+      destination: json['destination'] ?? 'Destination',
       events: (json['events'] as List<dynamic>? ?? [])
           .map((e) => TrackingEvent.fromJson(Map<String, dynamic>.from(e)))
           .toList(),
@@ -245,113 +501,6 @@ class PackageItem {
       updatedAt:
           DateTime.tryParse(json['updatedAt'] ?? '') ?? DateTime.now(),
     );
-  }
-
-  static List<PackageItem> defaultSamplePackages() {
-    return [
-      PackageItem(
-        id: 'sample_1',
-        trackingNumber: 'TRK123456789',
-        customName: 'Wireless Headphones',
-        carrierId: 'dhl',
-        status: PackageStatus.arrivingSoon,
-        eta: 'Oct 31, 2026 • 6:00 PM',
-        origin: 'Frankfurt, Germany',
-        destination: 'Oran, Algeria',
-        updatedAt: DateTime.now(),
-        events: const [
-          TrackingEvent(
-            title: 'Package picked up',
-            timestamp: 'Oct 29, 2026 • 10:24 AM',
-            location: 'Frankfurt Sorting Center',
-            isCompleted: true,
-            isCurrent: false,
-          ),
-          TrackingEvent(
-            title: 'In transit',
-            timestamp: 'Oct 30, 2026 • 02:17 PM',
-            location: 'Algiers International Hub (ALG)',
-            isCompleted: true,
-            isCurrent: false,
-          ),
-          TrackingEvent(
-            title: 'Arriving soon',
-            timestamp: 'Expected: Oct 31, 2026 • 6:00 PM',
-            location: 'Out for delivery - Es Senia, Oran',
-            isCompleted: false,
-            isCurrent: true,
-          ),
-        ],
-      ),
-      PackageItem(
-        id: 'sample_2',
-        trackingNumber: 'YAL-8849201DZ',
-        customName: 'Mechanical Keyboard',
-        carrierId: 'yalidine',
-        status: PackageStatus.inTransit,
-        eta: 'Nov 02, 2026 • 2:00 PM',
-        origin: 'Bab Ezzouar, Algiers',
-        destination: 'Es Senia Stop Desk, Oran',
-        updatedAt: DateTime.now().subtract(const Duration(hours: 2)),
-        events: const [
-          TrackingEvent(
-            title: 'Package picked up',
-            timestamp: 'Oct 30, 2026 • 09:15 AM',
-            location: 'Yalidine Agency - Bab Ezzouar',
-            isCompleted: true,
-            isCurrent: false,
-          ),
-          TrackingEvent(
-            title: 'In transit',
-            timestamp: 'Oct 31, 2026 • 08:40 AM',
-            location: 'Departed Regional Hub towards Oran',
-            isCompleted: false,
-            isCurrent: true,
-          ),
-        ],
-      ),
-      PackageItem(
-        id: 'sample_3',
-        trackingNumber: 'LP005928174CN',
-        customName: 'Smart Watch Strap (AliExpress)',
-        carrierId: 'algerie_poste',
-        status: PackageStatus.delivered,
-        eta: 'Delivered Oct 27, 2026',
-        origin: 'Shenzhen, China',
-        destination: 'Oran RP, Algeria',
-        updatedAt: DateTime.now().subtract(const Duration(days: 3)),
-        events: const [
-          TrackingEvent(
-            title: 'Package picked up',
-            timestamp: 'Oct 15, 2026 • 11:00 AM',
-            location: 'Cainiao Consolidation Warehouse',
-            isCompleted: true,
-            isCurrent: false,
-          ),
-          TrackingEvent(
-            title: 'In transit',
-            timestamp: 'Oct 24, 2026 • 04:30 PM',
-            location: 'Algérie Poste EMS Algiers Exchange',
-            isCompleted: true,
-            isCurrent: false,
-          ),
-          TrackingEvent(
-            title: 'Arriving soon',
-            timestamp: 'Oct 27, 2026 • 09:00 AM',
-            location: 'Oran El M\'Naouer Post Office',
-            isCompleted: true,
-            isCurrent: false,
-          ),
-          TrackingEvent(
-            title: 'Delivered',
-            timestamp: 'Oct 27, 2026 • 01:45 PM',
-            location: 'Delivered to recipient in Oran',
-            isCompleted: true,
-            isCurrent: true,
-          ),
-        ],
-      ),
-    ];
   }
 }
 
@@ -376,28 +525,24 @@ class AppStrings {
       'picked_up': 'Package picked up',
       'all': 'All',
       'add_package': 'Add Package',
-      'custom_name': 'Custom Name (e.g. New Shoes)',
-      'carrier': 'Select Carrier',
-      'track_now': 'Track Package',
-      'free_limit_title': 'Free Plan Limit Reached (5/5)',
-      'upgrade_premium': 'Upgrade to Arrivo Premium',
-      'demo_mode_badge': 'Demo Mode Active (No API Key Required)',
-      'live_api_badge': '17TRACK Live API Connected',
-      'not_found_title': 'Tracking Number Not Found',
+      'custom_name': 'Custom Name (e.g. Phone Case)',
+      'carrier': 'Select Courier (2,400+ Supported)',
+      'track_now': 'Track Package Live',
+      'not_found_title': 'Invalid Tracking Number',
       'not_found_desc':
-          'We could not find any shipment matching this tracking number. Double-check the digits or pick the carrier manually.',
-      'empty_title': 'No packages here yet',
+          'Please enter a valid tracking number (at least 4 characters).',
+      'empty_title': 'No packages tracked yet',
       'empty_desc':
-          'Tap the blue + button to add a tracking number or scan a barcode.',
-      'onboarding_1_title': 'Track Global & Local Parcels',
+          'Paste your real tracking number above or tap the + button to start tracking.',
+      'onboarding_1_title': 'Track 2,400+ Local & Global Couriers',
       'onboarding_1_desc':
-          'Real-time updates for Yalidine, ZR Express, Algérie Poste/EMS, DHL, Aramex, AliExpress, Temu & Shein.',
+          'Supports Yalidine, ZR Express, Maystro, Guepex, Algérie Poste/EMS, Cainiao/AliExpress, DHL, UPS, FedEx, Aramex & more.',
       'onboarding_2_title': 'Instant Barcode & QR Scanner',
       'onboarding_2_desc':
-          'Point your camera at any shipping receipt or box label to add your package in one second.',
-      'onboarding_3_title': 'Live Push Notifications',
+          'Point your camera at any shipping label to scan the barcode immediately.',
+      'onboarding_3_title': 'Cloud Backup & Account Sync',
       'onboarding_3_desc':
-          'Get notified immediately when your parcel leaves the hub or is arriving soon.',
+          'Sign in with Google or Email to backup and sync all your packages across your devices.',
       'get_started': 'Get Started',
       'next': 'Next',
       'skip': 'Skip',
@@ -423,31 +568,27 @@ class AppStrings {
       'in_transit': 'En Transit',
       'arriving_soon': 'Arrive bientôt',
       'delivered': 'Livré',
-      'picked_up': 'Colis pris en charge',
+      'picked_up': 'Colis enregistré',
       'all': 'Tous',
       'add_package': 'Ajouter un colis',
-      'custom_name': 'Nom personnalisé (ex: Casque Audio)',
-      'carrier': 'Transporteur',
-      'track_now': 'Suivre le colis',
-      'free_limit_title': 'Limite Gratuite Atteinte (5/5)',
-      'upgrade_premium': 'Passer à Arrivo Premium',
-      'demo_mode_badge': 'Mode Démo Actif (Sans clé API)',
-      'live_api_badge': 'API 17TRACK Connectée',
-      'not_found_title': 'Numéro de suivi introuvable',
+      'custom_name': 'Nom personnalisé (ex: Commande)',
+      'carrier': 'Transporteur (2 400+ supportés)',
+      'track_now': 'Suivre en direct',
+      'not_found_title': 'Numéro de suivi invalide',
       'not_found_desc':
-          'Aucun colis trouvé pour ce numéro. Vérifiez le code ou choisissez le transporteur manuellement.',
-      'empty_title': 'Aucun colis pour le moment',
+          'Veuillez entrer un numéro de suivi valide (au moins 4 caractères).',
+      'empty_title': 'Aucun colis suivi',
       'empty_desc':
-          'Appuyez sur le bouton + pour ajouter un numéro ou scanner un code-barres.',
-      'onboarding_1_title': 'Suivi Local & International',
+          'Entrez un numéro de suivi en haut ou appuyez sur + pour suivre votre premier colis.',
+      'onboarding_1_title': '2 400+ Transporteurs Locaux & Mondiaux',
       'onboarding_1_desc':
-          'Suivez Yalidine, ZR Express, Algérie Poste/EMS, DHL, Aramex, AliExpress, Temu et Shein en temps réel.',
+          'Yalidine, ZR Express, Maystro, Guepex, Algérie Poste/EMS, Cainiao/AliExpress, DHL, UPS, FedEx, Aramex et plus.',
       'onboarding_2_title': 'Scanner Code-Barres & QR',
       'onboarding_2_desc':
-          'Scannez votre bordereau d\'expédition avec la caméra pour ajouter un colis instantanément.',
-      'onboarding_3_title': 'Notifications en Temps Réel',
+          'Scannez votre étiquette d\'expédition avec la caméra en une seconde.',
+      'onboarding_3_title': 'Sauvegarde & Synchronisation Cloud',
       'onboarding_3_desc':
-          'Recevez une alerte dès que votre colis change de statut ou arrive bientôt.',
+          'Connectez-vous avec Google ou Email pour sauvegarder et synchroniser tous vos colis.',
       'get_started': 'Commencer',
       'next': 'Suivant',
       'skip': 'Passer',
@@ -459,7 +600,7 @@ class AppStrings {
     },
     'ar': {
       'tagline': 'تتبع طرودك في أي وقت\nومن أي مكان',
-      'search_hint': 'أدخل رقم التتبع...',
+      'search_hint': 'أدخل رقم التتبع الحقيقي...',
       'scan_barcode': 'مسح\nالباركود',
       'track_history': 'سجل\nالتتبع',
       'settings': 'الإعدادات',
@@ -473,30 +614,25 @@ class AppStrings {
       'in_transit': 'في الطريق',
       'arriving_soon': 'يصل قريباً',
       'delivered': 'تم التسليم',
-      'picked_up': 'تم استلام الطرد',
+      'picked_up': 'تم تسجيل الشحنة',
       'all': 'الكل',
       'add_package': 'إضافة طرد جديد',
-      'custom_name': 'اسم الطرد (مثال: سماعات لاسلكية)',
-      'carrier': 'شركة الشحن',
-      'track_now': 'تتبع الطرد الآن',
-      'free_limit_title': 'وصلت للحد المجاني (5/5)',
-      'upgrade_premium': 'الترقية إلى Arrivo Premium',
-      'demo_mode_badge': 'الوضع التجريبي مفعل تلقائياً',
-      'live_api_badge': 'متصل بخدمة 17TRACK المباشرة',
-      'not_found_title': 'لم يتم العثور على رقم التتبع',
-      'not_found_desc':
-          'تعذر العثور على شحنة بهذا الرقم. يرجى التأكد من الرقم أو اختيار شركة الشحن يدوياً.',
-      'empty_title': 'لا توجد طرود حالياً',
-      'empty_desc': 'اضغط على زر + الأزرق لإضافة رقم تتبع أو مسح الباركود.',
-      'onboarding_1_title': 'تتبع محلي ودولي شامل',
+      'custom_name': 'اسم الطرد (مثال: طلبية جديدة)',
+      'carrier': 'شركة الشحن (أكثر من 2400 شركة)',
+      'track_now': 'تتبع الطرد مباشرة',
+      'not_found_title': 'رقم التتبع غير صالح',
+      'not_found_desc': 'يرجى إدخال رقم تتبع صحيح (4 أحرف أو أرقام على الأقل).',
+      'empty_title': 'لا توجد طرود مضافة بعد',
+      'empty_desc':
+          'أدخل رقم التتبع في الأعلى أو اضغط على زر + الأزرق لبدء تتبع طرودك الحقيقية.',
+      'onboarding_1_title': 'دعم أكثر من 2400 شركة شحن محلية وعالمية',
       'onboarding_1_desc':
-          'دعم كامل لشركات ياليدين، ZR Express، بريد الجزائر EMS، DHL، أرامكس، AliExpress، Temu و Shein.',
-      'onboarding_2_title': 'ماسح باركود و QR سريع',
-      'onboarding_2_desc':
-          'وجه الكاميرا نحو ملصق الشحنة لإضافة الطرد في ثانية واحدة.',
-      'onboarding_3_title': 'إشعارات فورية لتحديثات الشحن',
+          'ياليدين، ZR Express، مايسترو، غويبيكس، بريد الجزائر EMS، AliExpress، DHL، UPS، FedEx، أرامكس والمزيد.',
+      'onboarding_2_title': 'ماسح باركود و QR بالكاميرا',
+      'onboarding_2_desc': 'وجه الكاميرا نحو ملصق الطرد لمسح رقم التتبع فوراً.',
+      'onboarding_3_title': 'نسخ احتياطي ومزامنة عبر الحساب',
       'onboarding_3_desc':
-          'احصل على تنبيه فوري عند تغير حالة طردك أو اقتراب موعد وصوله.',
+          'سجل الدخول بحساب Google أو البريد الإلكتروني لحفظ ومزامنة جميع طرودك.',
       'get_started': 'ابدأ الآن',
       'next': 'التالي',
       'skip': 'تخطي',
