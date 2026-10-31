@@ -28,11 +28,11 @@ class ArrivoApp extends StatefulWidget {
 
 class _ArrivoAppState extends State<ArrivoApp> with WidgetsBindingObserver {
   List<PackageItem> _packages = [];
+  UserAccount? _userAccount;
   String _lang = 'en';
   String _themeMode = 'light';
   bool _onboardingDone = true;
   bool _notificationsEnabled = true;
-  bool _isPremium = false;
   bool _isLoading = true;
   Timer? _backgroundTimer;
 
@@ -53,7 +53,7 @@ class _ArrivoAppState extends State<ArrivoApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _checkSilentUpdates();
+      _refreshActivePackagesSilently();
     }
   }
 
@@ -63,7 +63,7 @@ class _ArrivoAppState extends State<ArrivoApp> with WidgetsBindingObserver {
     final theme = await StorageService.loadThemeMode();
     final onboarded = await StorageService.isOnboardingComplete();
     final notif = await StorageService.loadNotificationsEnabled();
-    final premium = await StorageService.loadIsPremium();
+    final account = await StorageService.loadUserAccount();
 
     if (mounted) {
       setState(() {
@@ -72,37 +72,55 @@ class _ArrivoAppState extends State<ArrivoApp> with WidgetsBindingObserver {
         _themeMode = theme;
         _onboardingDone = onboarded;
         _notificationsEnabled = notif;
-        _isPremium = premium;
+        _userAccount = account;
         _isLoading = false;
       });
     }
 
     await NotificationService.requestPermission();
 
-    // Periodic background refresh while app is alive
     _backgroundTimer = Timer.periodic(const Duration(minutes: 15), (_) {
-      _checkSilentUpdates();
+      _refreshActivePackagesSilently();
     });
   }
 
-  Future<void> _checkSilentUpdates() async {
-    if (!_notificationsEnabled || _packages.isEmpty) return;
-    // Check if any package is arriving soon
-    final arriving = _packages.where(
-      (p) => !p.isArchived && p.status == PackageStatus.arrivingSoon,
-    );
-    if (arriving.isNotEmpty) {
-      final first = arriving.first;
-      await NotificationService.showNotification(
-        id: 100,
-        title: 'Arrivo: ${first.customName}',
-        body: 'Status update: ${first.eta}',
-      );
+  Future<void> _refreshActivePackagesSilently() async {
+    if (_packages.isEmpty) return;
+    final List<PackageItem> updatedList = [];
+    bool changed = false;
+
+    for (final pkg in _packages) {
+      if (pkg.isArchived || pkg.status == PackageStatus.delivered) {
+        updatedList.add(pkg);
+        continue;
+      }
+      try {
+        final refreshed = await TrackingApiService.fetchTrackingInfo(
+          trackingNumber: pkg.trackingNumber,
+          customName: pkg.customName,
+          selectedCarrierId: pkg.carrierId,
+        );
+        if (refreshed.events.length != pkg.events.length ||
+            refreshed.status != pkg.status) {
+          changed = true;
+          if (_notificationsEnabled) {
+            await NotificationService.showNotification(
+              id: pkg.trackingNumber.hashCode,
+              title: 'Update: ${pkg.customName}',
+              body: refreshed.events.last.title,
+            );
+          }
+        }
+        updatedList.add(refreshed.copyWith(customName: pkg.customName));
+      } catch (_) {
+        updatedList.add(pkg);
+      }
+    }
+
+    if (changed && mounted) {
+      await _savePackagesList(updatedList);
     }
   }
-
-  int get _activePackageCount =>
-      _packages.where((p) => !p.isArchived).length;
 
   ThemeMode get _resolvedThemeMode {
     if (_themeMode == 'dark') return ThemeMode.dark;
@@ -125,14 +143,35 @@ class _ArrivoAppState extends State<ArrivoApp> with WidgetsBindingObserver {
     await StorageService.saveNotificationsEnabled(enabled);
   }
 
-  Future<void> _updatePremium(bool value) async {
-    setState(() => _isPremium = value);
-    await StorageService.saveIsPremium(value);
-  }
-
   Future<void> _savePackagesList(List<PackageItem> updated) async {
     setState(() => _packages = updated);
     await StorageService.savePackages(updated);
+    if (_userAccount != null) {
+      await StorageService.saveAccountBackupVault(
+        _userAccount!.email,
+        updated,
+      );
+      final updatedAcc =
+          _userAccount!.copyWith(lastSyncedAt: DateTime.now());
+      setState(() => _userAccount = updatedAcc);
+      await StorageService.saveUserAccount(updatedAcc);
+    }
+  }
+
+  Future<void> _handleAccountSignedIn(UserAccount account) async {
+    final syncedPackages = await CloudSyncService.syncPackages(
+      account: account,
+      currentPackages: _packages,
+    );
+    setState(() {
+      _userAccount = account.copyWith(lastSyncedAt: DateTime.now());
+      _packages = syncedPackages;
+    });
+  }
+
+  Future<void> _handleSignOut() async {
+    await StorageService.saveUserAccount(null);
+    setState(() => _userAccount = null);
   }
 
   @override
@@ -193,22 +232,22 @@ class _ArrivoAppState extends State<ArrivoApp> with WidgetsBindingObserver {
                 )
               : MainNavigationShell(
                   packages: _packages,
+                  userAccount: _userAccount,
                   lang: _lang,
                   themeMode: _themeMode,
                   notificationsEnabled: _notificationsEnabled,
-                  isPremium: _isPremium,
-                  activePackageCount: _activePackageCount,
                   onPackagesChanged: _savePackagesList,
                   onLanguageChanged: _updateLanguage,
                   onThemeChanged: _updateTheme,
                   onNotificationsChanged: _updateNotifications,
-                  onPremiumChanged: _updatePremium,
+                  onAccountSignedIn: _handleAccountSignedIn,
+                  onSignOut: _handleSignOut,
                 ),
     );
   }
 }
 
-/// 1. ONBOARDING SCREEN (3 slides + Language Picker for Arabic, French, English)
+/// ONBOARDING SCREEN
 class OnboardingScreen extends StatefulWidget {
   final String lang;
   final ValueChanged<String> onLanguageChanged;
@@ -243,7 +282,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         AppStrings.tr(widget.lang, 'onboarding_2_desc'),
       ),
       (
-        Icons.notifications_active_rounded,
+        Icons.cloud_done_rounded,
         AppStrings.tr(widget.lang, 'onboarding_3_title'),
         AppStrings.tr(widget.lang, 'onboarding_3_desc'),
       ),
@@ -265,7 +304,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           child: Column(
             children: [
               const SizedBox(height: 16),
-              // Language Picker Row
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Row(
@@ -326,7 +364,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 26,
+                              fontSize: 25,
                               fontWeight: FontWeight.w800,
                             ),
                           ),
@@ -336,7 +374,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: Colors.white.withOpacity(0.88),
-                              fontSize: 16,
+                              fontSize: 15.5,
                               height: 1.45,
                             ),
                           ),
@@ -346,7 +384,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   },
                 ),
               ),
-              // Page dots + Next/Get Started buttons
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 8, 24, 28),
                 child: Row(
@@ -439,33 +476,33 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 }
 
-/// MAIN SHELL WITH HOME, TRACK, HISTORY, PROFILE & FLOATING '+' BUTTON
+/// MAIN NAVIGATION SHELL
 class MainNavigationShell extends StatefulWidget {
   final List<PackageItem> packages;
+  final UserAccount? userAccount;
   final String lang;
   final String themeMode;
   final bool notificationsEnabled;
-  final bool isPremium;
-  final int activePackageCount;
   final ValueChanged<List<PackageItem>> onPackagesChanged;
   final ValueChanged<String> onLanguageChanged;
   final ValueChanged<String> onThemeChanged;
   final ValueChanged<bool> onNotificationsChanged;
-  final ValueChanged<bool> onPremiumChanged;
+  final ValueChanged<UserAccount> onAccountSignedIn;
+  final VoidCallback onSignOut;
 
   const MainNavigationShell({
     super.key,
     required this.packages,
+    required this.userAccount,
     required this.lang,
     required this.themeMode,
     required this.notificationsEnabled,
-    required this.isPremium,
-    required this.activePackageCount,
     required this.onPackagesChanged,
     required this.onLanguageChanged,
     required this.onThemeChanged,
     required this.onNotificationsChanged,
-    required this.onPremiumChanged,
+    required this.onAccountSignedIn,
+    required this.onSignOut,
   });
 
   @override
@@ -477,27 +514,20 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
   bool _isAddingLoading = false;
   final TextEditingController _homeSearchCtrl = TextEditingController();
 
-  void _openPaywall() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => PremiumPaywallScreen(
-          isPremium: widget.isPremium,
-          activeCount: widget.activePackageCount,
-          onUnlockDemoPremium: () {
-            widget.onPremiumChanged(true);
-            Navigator.of(context).pop();
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Arrivo Premium unlocked! Unlimited packages active.'),
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-
   Future<void> _openBarcodeScanner({bool autoTrack = true}) async {
+    final granted = await NotificationService.requestCameraPermission();
+    if (!granted && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Camera permission is required to scan barcodes. Please allow Camera access.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
     final scannedCode = await Navigator.of(context).push<String>(
       MaterialPageRoute(builder: (_) => const BarcodeScannerScreen()),
     );
@@ -511,12 +541,6 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
   }
 
   void _openAddPackageDialog({String? prefillNumber}) {
-    // Check Free Plan Limit (5 active packages)
-    if (!widget.isPremium && widget.activePackageCount >= 5) {
-      _openPaywall();
-      return;
-    }
-
     final numberCtrl = TextEditingController(text: prefillNumber ?? '');
     final nameCtrl = TextEditingController();
     String selectedCarrier = 'auto';
@@ -543,181 +567,168 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                   top: Radius.circular(28),
                 ),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        AppStrings.tr(widget.lang, 'add_package'),
-                        style: const TextStyle(
-                          fontSize: 21,
-                          fontWeight: FontWeight.w800,
-                        ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      AppStrings.tr(widget.lang, 'add_package'),
+                      style: const TextStyle(
+                        fontSize: 21,
+                        fontWeight: FontWeight.w800,
                       ),
-                      if (!widget.isPremium)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: ArrivoColors.chipBlueBg,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            'Free Plan: ${widget.activePackageCount}/5',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: ArrivoColors.primaryBlue,
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: numberCtrl,
+                      onChanged: (_) => setSheetState(() {}),
+                      decoration: InputDecoration(
+                        labelText: AppStrings.tr(widget.lang, 'search_hint'),
+                        hintText: 'Enter any tracking number...',
+                        prefixIcon: const Icon(Icons.qr_code_2_rounded),
+                        suffixIcon: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: 'Paste',
+                              icon: const Icon(Icons.content_paste_rounded),
+                              onPressed: () async {
+                                final data =
+                                    await Clipboard.getData('text/plain');
+                                if (data?.text != null) {
+                                  numberCtrl.text = data!.text!.trim();
+                                  setSheetState(() {});
+                                }
+                              },
                             ),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: numberCtrl,
-                    onChanged: (_) => setSheetState(() {}),
-                    decoration: InputDecoration(
-                      labelText: AppStrings.tr(widget.lang, 'search_hint'),
-                      hintText: 'e.g. YAL-99281DZ or TRK123456789',
-                      prefixIcon: const Icon(Icons.qr_code_2_rounded),
-                      suffixIcon: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            tooltip: 'Paste',
-                            icon: const Icon(Icons.content_paste_rounded),
-                            onPressed: () async {
-                              final data =
-                                  await Clipboard.getData('text/plain');
-                              if (data?.text != null) {
-                                numberCtrl.text = data!.text!.trim();
-                                setSheetState(() {});
-                              }
-                            },
-                          ),
-                          IconButton(
-                            tooltip: 'Scan Barcode',
-                            icon: const Icon(
-                              Icons.camera_alt_rounded,
-                              color: ArrivoColors.primaryBlue,
+                            IconButton(
+                              tooltip: 'Scan Barcode',
+                              icon: const Icon(
+                                Icons.camera_alt_rounded,
+                                color: ArrivoColors.primaryBlue,
+                              ),
+                              onPressed: () async {
+                                final ok = await NotificationService
+                                    .requestCameraPermission();
+                                if (!ok || !ctx.mounted) return;
+                                final code =
+                                    await Navigator.of(ctx).push<String>(
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const BarcodeScannerScreen(),
+                                  ),
+                                );
+                                if (code != null && code.isNotEmpty) {
+                                  numberCtrl.text = code;
+                                  setSheetState(() {});
+                                }
+                              },
                             ),
-                            onPressed: () async {
-                              final code =
-                                  await Navigator.of(ctx).push<String>(
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      const BarcodeScannerScreen(),
-                                ),
-                              );
-                              if (code != null && code.isNotEmpty) {
-                                numberCtrl.text = code;
-                                setSheetState(() {});
-                              }
-                            },
-                          ),
-                        ],
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                  ),
-                  if (numberCtrl.text.trim().isNotEmpty &&
-                      selectedCarrier == 'auto') ...[
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.auto_awesome,
-                          size: 16,
-                          color: ArrivoColors.primaryBlue,
+                          ],
                         ),
-                        const SizedBox(width: 6),
-                        Text(
-                          'Auto-detected: ${detected.name} (${detected.region})',
-                          style: const TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
-                            color: ArrivoColors.primaryBlue,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                  const SizedBox(height: 14),
-                  TextField(
-                    controller: nameCtrl,
-                    decoration: InputDecoration(
-                      labelText: AppStrings.tr(widget.lang, 'custom_name'),
-                      prefixIcon: const Icon(Icons.inventory_2_outlined),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  DropdownButtonFormField<String>(
-                    value: selectedCarrier,
-                    decoration: InputDecoration(
-                      labelText: AppStrings.tr(widget.lang, 'carrier'),
-                      prefixIcon: const Icon(Icons.local_shipping_outlined),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                    items: CarrierRegistry.carriers
-                        .map(
-                          (c) => DropdownMenuItem(
-                            value: c.id,
-                            child: Text('${c.name} • ${c.region}'),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (val) {
-                      if (val != null) {
-                        setSheetState(() => selectedCarrier = val);
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 18),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: ArrivoColors.primaryBlue,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
+                        border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
                       ),
-                      icon: const Icon(Icons.track_changes_rounded),
-                      label: Text(
-                        AppStrings.tr(widget.lang, 'track_now'),
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
+                    ),
+                    if (numberCtrl.text.trim().isNotEmpty &&
+                        selectedCarrier == 'auto') ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.auto_awesome,
+                            size: 16,
+                            color: ArrivoColors.primaryBlue,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Auto-detected: ${detected.name} (${detected.region})',
+                              style: const TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                                color: ArrivoColors.primaryBlue,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: nameCtrl,
+                      decoration: InputDecoration(
+                        labelText: AppStrings.tr(widget.lang, 'custom_name'),
+                        prefixIcon: const Icon(Icons.inventory_2_outlined),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
                         ),
                       ),
-                      onPressed: () {
-                        final rawNum = numberCtrl.text.trim();
-                        if (rawNum.isEmpty) return;
-                        Navigator.of(ctx).pop();
-                        _submitNewPackage(
-                          trackingNumber: rawNum,
-                          customName: nameCtrl.text.trim(),
-                          carrierId: selectedCarrier,
-                        );
+                    ),
+                    const SizedBox(height: 14),
+                    DropdownButtonFormField<String>(
+                      value: selectedCarrier,
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        labelText: AppStrings.tr(widget.lang, 'carrier'),
+                        prefixIcon: const Icon(Icons.local_shipping_outlined),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      items: CarrierRegistry.carriers
+                          .map(
+                            (c) => DropdownMenuItem(
+                              value: c.id,
+                              child: Text(
+                                '${c.name} (${c.region})',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setSheetState(() => selectedCarrier = val);
+                        }
                       },
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 18),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: ArrivoColors.primaryBlue,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        icon: const Icon(Icons.track_changes_rounded),
+                        label: Text(
+                          AppStrings.tr(widget.lang, 'track_now'),
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        onPressed: () {
+                          final rawNum = numberCtrl.text.trim();
+                          if (rawNum.isEmpty) return;
+                          Navigator.of(ctx).pop();
+                          _submitNewPackage(
+                            trackingNumber: rawNum,
+                            customName: nameCtrl.text.trim(),
+                            carrierId: selectedCarrier,
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           },
@@ -731,11 +742,6 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
     required String customName,
     required String carrierId,
   }) async {
-    if (!widget.isPremium && widget.activePackageCount >= 5) {
-      _openPaywall();
-      return;
-    }
-
     setState(() => _isAddingLoading = true);
 
     try {
@@ -745,19 +751,28 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
         selectedCarrierId: carrierId,
       );
 
-      final updated = [newPkg, ...widget.packages];
+      final filtered = widget.packages
+          .where((p) =>
+              p.trackingNumber.toUpperCase() !=
+              newPkg.trackingNumber.toUpperCase())
+          .toList();
+      final updated = [newPkg, ...filtered];
       widget.onPackagesChanged(updated);
 
       if (widget.notificationsEnabled) {
         await NotificationService.showNotification(
           id: DateTime.now().millisecondsSinceEpoch % 10000,
-          title: 'Package Added: ${newPkg.customName}',
-          body: '#${newPkg.trackingNumber} • ${newPkg.eta}',
+          title: 'Tracking: ${newPkg.customName}',
+          body: '#${newPkg.trackingNumber} • ${newPkg.events.last.title}',
         );
       }
     } on FormatException {
       if (mounted) {
-        _showNotFoundDialog(trackingNumber);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(AppStrings.tr(widget.lang, 'not_found_desc')),
+          ),
+        );
       }
     } finally {
       if (mounted) {
@@ -766,61 +781,37 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
     }
   }
 
-  void _showNotFoundDialog(String trackingNumber) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: Row(
-          children: [
-            const Icon(Icons.error_outline_rounded, color: Colors.red, size: 28),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                AppStrings.tr(widget.lang, 'not_found_title'),
-                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
-              ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Code: #$trackingNumber',
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                color: ArrivoColors.primaryBlue,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(AppStrings.tr(widget.lang, 'not_found_desc')),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: ArrivoColors.primaryBlue,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              _openAddPackageDialog(prefillNumber: trackingNumber);
-            },
-            child: const Text('Try Again'),
-          ),
-        ],
-      ),
+  Future<void> _refreshSinglePackage(PackageItem pkg) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Refreshing #${pkg.trackingNumber}...')),
     );
+    try {
+      final refreshed = await TrackingApiService.fetchTrackingInfo(
+        trackingNumber: pkg.trackingNumber,
+        customName: pkg.customName,
+        selectedCarrierId: pkg.carrierId,
+      );
+      final updated = widget.packages
+          .map((p) => p.id == pkg.id
+              ? refreshed.copyWith(customName: pkg.customName)
+              : p)
+          .toList();
+      widget.onPackagesChanged(updated);
+    } catch (_) {}
+  }
+
+  void _openLiveCourierWeb(PackageItem pkg) {
+    final carrier = CarrierRegistry.byId(pkg.carrierId);
+    final url = carrier.buildLiveTrackingUrl(pkg.trackingNumber);
+    NotificationService.openExternalUrl(url);
   }
 
   void _handleCardMenuAction(PackageItem pkg, String action) {
-    if (action == 'rename') {
+    if (action == 'refresh') {
+      _refreshSinglePackage(pkg);
+    } else if (action == 'live_web') {
+      _openLiveCourierWeb(pkg);
+    } else if (action == 'rename') {
       final ctrl = TextEditingController(text: pkg.customName);
       showDialog(
         context: context,
@@ -852,7 +843,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
       );
     } else if (action == 'share') {
       Share.share(
-        'Arrivo Package Tracking:\n${pkg.customName} (#${pkg.trackingNumber})\nStatus: ${pkg.status.name}\nETA: ${pkg.eta}',
+        'Arrivo Package Tracking:\n${pkg.customName} (#${pkg.trackingNumber})\nStatus: ${pkg.status.name}\nLatest: ${pkg.events.isNotEmpty ? pkg.events.last.title : pkg.eta}',
       );
     } else if (action == 'archive') {
       final updated = widget.packages
@@ -880,6 +871,8 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
         builder: (_) => PackageDetailsScreen(
           package: pkg,
           lang: widget.lang,
+          onRefreshLive: () => _refreshSinglePackage(pkg),
+          onOpenLiveWeb: () => _openLiveCourierWeb(pkg),
           onUpdatePackage: (updatedPkg) {
             final list = widget.packages
                 .map((p) => p.id == updatedPkg.id ? updatedPkg : p)
@@ -909,35 +902,17 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
             Text('About Arrivo', style: TextStyle(fontWeight: FontWeight.w800)),
           ],
         ),
-        content: Column(
+        content: const Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Arrivo v1.0.0 (com.arrivo.app)',
+            Text(
+              'Arrivo v2.0.0 (com.arrivo.app)',
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
-            const SizedBox(height: 8),
-            const Text(
-              'Track your local Algerian & international packages anytime, anywhere. Supports Yalidine, ZR Express, Algérie Poste/EMS, DHL, Aramex, AliExpress, Temu, and Shein.',
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: ArrivoColors.chipBlueBg,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                TrackingApiService.isLiveApiConfigured
-                    ? AppStrings.tr(widget.lang, 'live_api_badge')
-                    : AppStrings.tr(widget.lang, 'demo_mode_badge'),
-                style: const TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w700,
-                  color: ArrivoColors.primaryBlue,
-                ),
-              ),
+            SizedBox(height: 8),
+            Text(
+              'Live tracking for 2,400+ local Algerian & global couriers including Yalidine, ZR Express, Maystro, Guepex, Algérie Poste/EMS, Cainiao/AliExpress, DHL, UPS, FedEx, Aramex, Temu, and Shein.\n\nIncludes Google & Email Account Sync and Barcode Scanner.',
             ),
           ],
         ),
@@ -961,41 +936,35 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
       body: IndexedStack(
         index: _selectedIndex,
         children: [
-          // TAB 0: HOME SCREEN (Matching the attached screenshot design)
           _buildHomeScreen(activePackages),
-
-          // TAB 1: TRACK SCREEN (Tabs: In Transit, Delivered, All + Search)
           TrackPackagesTab(
             packages: activePackages,
             lang: widget.lang,
             onOpenDetails: _openPackageDetails,
             onMenuAction: _handleCardMenuAction,
           ),
-
-          // TAB 2: HISTORY SCREEN (Delivered & Archived packages)
           HistoryPackagesTab(
             packages: widget.packages,
             lang: widget.lang,
             onOpenDetails: _openPackageDetails,
             onMenuAction: _handleCardMenuAction,
           ),
-
-          // TAB 3: PROFILE & SETTINGS SCREEN
           ProfileSettingsTab(
+            userAccount: widget.userAccount,
+            packages: widget.packages,
             lang: widget.lang,
             themeMode: widget.themeMode,
             notificationsEnabled: widget.notificationsEnabled,
-            isPremium: widget.isPremium,
-            activeCount: widget.activePackageCount,
             onLanguageChanged: widget.onLanguageChanged,
             onThemeChanged: widget.onThemeChanged,
             onNotificationsChanged: widget.onNotificationsChanged,
-            onOpenPaywall: _openPaywall,
+            onAccountSignedIn: widget.onAccountSignedIn,
+            onSignOut: widget.onSignOut,
+            onPackagesRestored: widget.onPackagesChanged,
             onShowAbout: _showAboutDialog,
           ),
         ],
       ),
-      // Blue Floating '+' Button with halo ring matching the screenshot
       floatingActionButton: Container(
         padding: const EdgeInsets.all(7),
         decoration: BoxDecoration(
@@ -1015,7 +984,6 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
           ),
         ),
       ),
-      // Rounded Floating Bottom Navigation Bar matching the screenshot
       bottomNavigationBar: _buildBottomNavBar(),
     );
   }
@@ -1026,7 +994,6 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Top Blue Wavy Header + Floating Search Bar
           Stack(
             clipBehavior: Clip.none,
             children: [
@@ -1059,31 +1026,16 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                                 ],
                               ),
                             ),
-                            // Notification Bell with Red Dot
-                            GestureDetector(
-                              onTap: () async {
-                                await NotificationService.showNotification(
-                                  id: 777,
-                                  title: 'Arrivo Live Tracker',
-                                  body:
-                                      'Your packages are being monitored in real time!',
-                                );
-                                if (mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'Notification sent! Check your phone status bar.',
-                                      ),
-                                    ),
-                                  );
-                                }
-                              },
-                              child: Stack(
-                                clipBehavior: Clip.none,
-                                children: [
-                                  Container(
+                            // Cloud Sync Status Button + Notification Bell
+                            Row(
+                              children: [
+                                GestureDetector(
+                                  onTap: () =>
+                                      setState(() => _selectedIndex = 3),
+                                  child: Container(
                                     width: 44,
                                     height: 44,
+                                    margin: const EdgeInsets.only(right: 8),
                                     decoration: BoxDecoration(
                                       color: const Color(0xFF002B8F)
                                           .withOpacity(0.75),
@@ -1092,31 +1044,61 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                                         color: Colors.white.withOpacity(0.18),
                                       ),
                                     ),
-                                    child: const Icon(
-                                      Icons.notifications_none_rounded,
+                                    child: Icon(
+                                      widget.userAccount != null
+                                          ? Icons.cloud_done_rounded
+                                          : Icons.cloud_upload_outlined,
                                       color: Colors.white,
-                                      size: 25,
+                                      size: 22,
                                     ),
                                   ),
-                                  Positioned(
-                                    top: 2,
-                                    right: 2,
-                                    child: Container(
-                                      width: 10,
-                                      height: 10,
-                                      decoration: const BoxDecoration(
-                                        color: ArrivoColors.alertRed,
-                                        shape: BoxShape.circle,
+                                ),
+                                GestureDetector(
+                                  onTap: () async {
+                                    await _openAddPackageDialog();
+                                  },
+                                  child: Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      Container(
+                                        width: 44,
+                                        height: 44,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF002B8F)
+                                              .withOpacity(0.75),
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                            color:
+                                                Colors.white.withOpacity(0.18),
+                                          ),
+                                        ),
+                                        child: const Icon(
+                                          Icons.notifications_none_rounded,
+                                          color: Colors.white,
+                                          size: 25,
+                                        ),
                                       ),
-                                    ),
+                                      if (activePackages.isNotEmpty)
+                                        Positioned(
+                                          top: 2,
+                                          right: 2,
+                                          child: Container(
+                                            width: 10,
+                                            height: 10,
+                                            decoration: const BoxDecoration(
+                                              color: ArrivoColors.alertRed,
+                                              shape: BoxShape.circle,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
                                   ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
                           ],
                         ),
                         const SizedBox(height: 4),
-                        // 3D Package Illustration on the right side of header
                         const Align(
                           alignment: Alignment.centerRight,
                           child: Padding(
@@ -1132,8 +1114,6 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                   ),
                 ),
               ),
-
-              // Floating White Pill Search Bar with Blue Arrow Button
               Positioned(
                 left: 18,
                 right: 18,
@@ -1223,10 +1203,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
               ),
             ],
           ),
-
           const SizedBox(height: 36),
-
-          // Four Quick-Action Tiles Row: Scan Barcode, Track History, Settings, About
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 13),
             child: Row(
@@ -1254,10 +1231,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
               ],
             ),
           ),
-
           const SizedBox(height: 24),
-
-          // "Your Packages" + "View All >"
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Row(
@@ -1301,10 +1275,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
               ],
             ),
           ),
-
           const SizedBox(height: 12),
-
-          // Package Cards List (with Skeleton Loader or Empty State)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 18),
             child: Column(
@@ -1331,11 +1302,12 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
   }
 
   Widget _buildEmptyStateCard() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(28),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDark ? const Color(0xFF17223B) : Colors.white,
         borderRadius: BorderRadius.circular(24),
       ),
       child: Column(
@@ -1344,10 +1316,10 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
           const SizedBox(height: 14),
           Text(
             AppStrings.tr(widget.lang, 'empty_title'),
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w800,
-              color: ArrivoColors.textDark,
+              color: isDark ? Colors.white : ArrivoColors.textDark,
             ),
           ),
           const SizedBox(height: 6),
@@ -1432,7 +1404,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
   }
 }
 
-/// 3. PACKAGE LIST SCREEN WITH TABS (In Transit, Delivered, All) & SEARCH
+/// PACKAGE LIST SCREEN WITH TABS & SEARCH
 class TrackPackagesTab extends StatefulWidget {
   final List<PackageItem> packages;
   final String lang;
@@ -1452,7 +1424,7 @@ class TrackPackagesTab extends StatefulWidget {
 }
 
 class _TrackPackagesTabState extends State<TrackPackagesTab> {
-  int _tab = 0; // 0 = In Transit, 1 = Delivered, 2 = All
+  int _tab = 0;
   String _query = '';
 
   @override
@@ -1559,7 +1531,7 @@ class _TrackPackagesTabState extends State<TrackPackagesTab> {
   }
 }
 
-/// 8. HISTORY SCREEN OF DELIVERED & ARCHIVED PACKAGES
+/// HISTORY SCREEN
 class HistoryPackagesTab extends StatelessWidget {
   final List<PackageItem> packages;
   final String lang;
@@ -1624,10 +1596,12 @@ class HistoryPackagesTab extends StatelessWidget {
   }
 }
 
-/// 4. PACKAGE DETAILS SCREEN (Status Header, ETA, Full Timeline, Rename, Share, Archive, Delete)
+/// PACKAGE DETAILS SCREEN WITH LIVE COURIER VERIFICATION & REFRESH
 class PackageDetailsScreen extends StatelessWidget {
   final PackageItem package;
   final String lang;
+  final VoidCallback onRefreshLive;
+  final VoidCallback onOpenLiveWeb;
   final ValueChanged<PackageItem> onUpdatePackage;
   final VoidCallback onDeletePackage;
 
@@ -1635,6 +1609,8 @@ class PackageDetailsScreen extends StatelessWidget {
     super.key,
     required this.package,
     required this.lang,
+    required this.onRefreshLive,
+    required this.onOpenLiveWeb,
     required this.onUpdatePackage,
     required this.onDeletePackage,
   });
@@ -1652,11 +1628,16 @@ class PackageDetailsScreen extends StatelessWidget {
         ),
         actions: [
           IconButton(
+            tooltip: 'Refresh Live Status',
+            icon: const Icon(Icons.refresh_rounded),
+            onPressed: onRefreshLive,
+          ),
+          IconButton(
             tooltip: 'Share',
             icon: const Icon(Icons.share_rounded),
             onPressed: () {
               Share.share(
-                'Arrivo Package: ${package.customName} (#${package.trackingNumber})\nCarrier: ${carrier.name}\nETA: ${package.eta}',
+                'Arrivo Package: ${package.customName} (#${package.trackingNumber})\nCourier: ${carrier.name}\nLatest: ${package.events.isNotEmpty ? package.events.last.title : package.eta}',
               );
             },
           ),
@@ -1672,7 +1653,6 @@ class PackageDetailsScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Status & ETA Header Card
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
@@ -1692,7 +1672,7 @@ class PackageDetailsScreen extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
+                            SelectableText(
                               '#${package.trackingNumber}',
                               style: const TextStyle(
                                 color: Colors.white,
@@ -1710,77 +1690,30 @@ class PackageDetailsScreen extends StatelessWidget {
                       ),
                     ],
                   ),
-                  const Divider(color: Colors.white24, height: 26),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Origin',
-                            style:
-                                TextStyle(color: Colors.white70, fontSize: 12),
-                          ),
-                          Text(
-                            package.origin,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const Icon(Icons.arrow_forward, color: Colors.white70),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          const Text(
-                            'Destination',
-                            style:
-                                TextStyle(color: Colors.white70, fontSize: 12),
-                          ),
-                          Text(
-                            package.destination,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Container(
+                  const SizedBox(height: 16),
+                  SizedBox(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.schedule_rounded, color: Colors.white),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'ETA: ${package.eta}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: ArrivoColors.primaryBlue,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
                         ),
-                      ],
+                      ),
+                      icon: const Icon(Icons.open_in_new_rounded),
+                      label: Text(
+                        'Open Live Courier Tracker (${carrier.name})',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      onPressed: onOpenLiveWeb,
                     ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 22),
-
-            // Quick Action Buttons Row
+            const SizedBox(height: 18),
             Row(
               children: [
                 Expanded(
@@ -1805,13 +1738,13 @@ class PackageDetailsScreen extends StatelessWidget {
                     icon: const Icon(Icons.check_circle_outline),
                     label: Text(
                       package.status == PackageStatus.delivered
-                          ? 'In Transit'
+                          ? 'Mark In Transit'
                           : 'Mark Delivered',
                     ),
                     onPressed: () {
                       final nextStatus =
                           package.status == PackageStatus.delivered
-                              ? PackageStatus.arrivingSoon
+                              ? PackageStatus.inTransit
                               : PackageStatus.delivered;
                       onUpdatePackage(package.copyWith(status: nextStatus));
                       Navigator.of(context).pop();
@@ -1821,14 +1754,12 @@ class PackageDetailsScreen extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 24),
-
             const Text(
-              'Full Tracking Timeline',
+              'Live Tracking Checkpoints',
               style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 14),
-
-            ...package.events.map(
+            ...package.events.reversed.map(
               (ev) => Container(
                 margin: const EdgeInsets.only(bottom: 12),
                 padding: const EdgeInsets.all(16),
@@ -1856,7 +1787,7 @@ class PackageDetailsScreen extends StatelessWidget {
                             ev.title,
                             style: const TextStyle(
                               fontWeight: FontWeight.w800,
-                              fontSize: 15.5,
+                              fontSize: 15,
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -1889,7 +1820,7 @@ class PackageDetailsScreen extends StatelessWidget {
   }
 }
 
-/// 2. BARCODE & QR CAMERA SCANNER SCREEN (mobile_scanner)
+/// FIXED CAMERA BARCODE & QR SCANNER SCREEN
 class BarcodeScannerScreen extends StatefulWidget {
   const BarcodeScannerScreen({super.key});
 
@@ -1898,13 +1829,53 @@ class BarcodeScannerScreen extends StatefulWidget {
 }
 
 class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
-  final MobileScannerController _scannerController = MobileScannerController();
+  late final MobileScannerController _scannerController;
   bool _hasScanned = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scannerController = MobileScannerController(
+      detectionSpeed: DetectionSpeed.normal,
+      facing: CameraFacing.back,
+      torchEnabled: false,
+    );
+  }
 
   @override
   void dispose() {
     _scannerController.dispose();
     super.dispose();
+  }
+
+  void _manualInputFallback() {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Enter Barcode Manually'),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(hintText: 'Tracking number...'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final code = ctrl.text.trim();
+              Navigator.of(ctx).pop();
+              if (code.isNotEmpty) {
+                Navigator.of(context).pop(code);
+              }
+            },
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -1917,8 +1888,19 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
         title: const Text('Scan Package Barcode / QR'),
         actions: [
           IconButton(
+            tooltip: 'Toggle Flashlight',
             icon: const Icon(Icons.flash_on_rounded),
             onPressed: () => _scannerController.toggleTorch(),
+          ),
+          IconButton(
+            tooltip: 'Switch Camera',
+            icon: const Icon(Icons.cameraswitch_rounded),
+            onPressed: () => _scannerController.switchCamera(),
+          ),
+          IconButton(
+            tooltip: 'Type Manually',
+            icon: const Icon(Icons.keyboard_rounded),
+            onPressed: _manualInputFallback,
           ),
         ],
       ),
@@ -1932,6 +1914,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                 final raw = barcode.rawValue;
                 if (raw != null && raw.trim().isNotEmpty) {
                   _hasScanned = true;
+                  HapticFeedback.mediumImpact();
                   Navigator.of(context).pop(raw.trim());
                   break;
                 }
@@ -1940,11 +1923,28 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
           ),
           Center(
             child: Container(
-              width: 260,
-              height: 180,
+              width: 280,
+              height: 190,
               decoration: BoxDecoration(
-                border: Border.all(color: ArrivoColors.primaryBlue, width: 3),
-                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: ArrivoColors.primaryBlue, width: 3.5),
+                borderRadius: BorderRadius.circular(22),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 42,
+            left: 24,
+            right: 24,
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.7),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: const Text(
+                'Align the shipping barcode or QR code inside the blue frame',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white, fontSize: 14),
               ),
             ),
           ),
@@ -1954,90 +1954,574 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   }
 }
 
-/// 9. SETTINGS & PROFILE SCREEN (Language RTL/LTR, Theme, Notifications, Plan, About)
-class ProfileSettingsTab extends StatelessWidget {
+/// PROFILE, GOOGLE/EMAIL ACCOUNT SYNC & SETTINGS SCREEN
+class ProfileSettingsTab extends StatefulWidget {
+  final UserAccount? userAccount;
+  final List<PackageItem> packages;
   final String lang;
   final String themeMode;
   final bool notificationsEnabled;
-  final bool isPremium;
-  final int activeCount;
   final ValueChanged<String> onLanguageChanged;
   final ValueChanged<String> onThemeChanged;
   final ValueChanged<bool> onNotificationsChanged;
-  final VoidCallback onOpenPaywall;
+  final ValueChanged<UserAccount> onAccountSignedIn;
+  final VoidCallback onSignOut;
+  final ValueChanged<List<PackageItem>> onPackagesRestored;
   final VoidCallback onShowAbout;
 
   const ProfileSettingsTab({
     super.key,
+    required this.userAccount,
+    required this.packages,
     required this.lang,
     required this.themeMode,
     required this.notificationsEnabled,
-    required this.isPremium,
-    required this.activeCount,
     required this.onLanguageChanged,
     required this.onThemeChanged,
     required this.onNotificationsChanged,
-    required this.onOpenPaywall,
+    required this.onAccountSignedIn,
+    required this.onSignOut,
+    required this.onPackagesRestored,
     required this.onShowAbout,
   });
 
   @override
+  State<ProfileSettingsTab> createState() => _ProfileSettingsTabState();
+}
+
+class _ProfileSettingsTabState extends State<ProfileSettingsTab> {
+  final TextEditingController _emailCtrl = TextEditingController();
+  final TextEditingController _passwordCtrl = TextEditingController();
+  final TextEditingController _nameCtrl = TextEditingController();
+  String _custom17Key = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadApiKey();
+  }
+
+  Future<void> _loadApiKey() async {
+    final k = await StorageService.loadCustom17TrackKey();
+    if (mounted) setState(() => _custom17Key = k);
+  }
+
+  Future<void> _handleGoogleSignIn() async {
+    // Try native Android Google Account Picker first
+    String? pickedEmail = await NotificationService.pickGoogleAccount();
+    if (pickedEmail == null || pickedEmail.trim().isEmpty) {
+      if (!mounted) return;
+      pickedEmail = await _promptGoogleEmailFallback();
+    }
+    if (pickedEmail != null && pickedEmail.trim().isNotEmpty) {
+      final acc =
+          await CloudSyncService.signInWithGoogleEmail(pickedEmail.trim());
+      widget.onAccountSignedIn(acc);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Signed in with Google (${acc.email}) & synced packages!',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<String?> _promptGoogleEmailFallback() async {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.account_circle_rounded, color: ArrivoColors.primaryBlue),
+            SizedBox(width: 8),
+            Text('Sign in with Google'),
+          ],
+        ),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.emailAddress,
+          decoration: const InputDecoration(
+            labelText: 'Your Google / Gmail Address',
+            hintText: 'yourname@gmail.com',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: ArrivoColors.primaryBlue,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openEmailAuthDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const Text(
+          'Sign In / Create Account',
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _nameCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Name (optional)',
+                  prefixIcon: Icon(Icons.person_outline),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _emailCtrl,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(
+                  labelText: 'Email Address',
+                  prefixIcon: Icon(Icons.email_outlined),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _passwordCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'Password',
+                  prefixIcon: Icon(Icons.lock_outline),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: ArrivoColors.primaryBlue,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () async {
+              final email = _emailCtrl.text.trim();
+              final pwd = _passwordCtrl.text.trim();
+              if (email.isEmpty || !email.contains('@') || pwd.length < 4) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Please enter a valid email and password (4+ chars).',
+                    ),
+                  ),
+                );
+                return;
+              }
+              try {
+                final acc = await CloudSyncService.signInWithEmail(
+                  email: email,
+                  password: pwd,
+                  displayName: _nameCtrl.text.trim(),
+                );
+                if (ctx.mounted) Navigator.of(ctx).pop();
+                widget.onAccountSignedIn(acc);
+              } on FormatException catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(e.message)),
+                  );
+                }
+              }
+            },
+            child: const Text('Sign In & Sync'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openPortableBackupDialog() {
+    final backupCode =
+        CloudSyncService.exportPortableBackupCode(widget.packages);
+    final importCtrl = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cloud Backup & Restore Code'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Copy your encrypted backup code to save or transfer all your packages to another phone:',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      backupCode,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: ArrivoColors.primaryBlue,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy_rounded),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: backupCode));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Backup code copied!')),
+                      );
+                    },
+                  ),
+                ],
+              ),
+              const Divider(height: 24),
+              const Text(
+                'Or paste a backup code below to restore packages:',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: importCtrl,
+                decoration: const InputDecoration(
+                  hintText: 'Paste backup code here...',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              try {
+                final restored = CloudSyncService.importPortableBackupCode(
+                  importCtrl.text,
+                );
+                widget.onPackagesRestored(restored);
+                Navigator.of(ctx).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Restored ${restored.length} packages successfully!',
+                    ),
+                  ),
+                );
+              } catch (_) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Invalid backup code.')),
+                );
+              }
+            },
+            child: const Text('Restore Packages'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openApiKeyDialog() {
+    final ctrl = TextEditingController(text: _custom17Key);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('17TRACK Live API Key'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Paste your free 17TRACK API key to enable automatic background checkpoints for all 2,400+ couriers (or leave blank to use Cainiao Global & Direct Live Courier tracking):',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              decoration: const InputDecoration(
+                labelText: '17TRACK API Token',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              await StorageService.saveCustom17TrackKey(ctrl.text);
+              await _loadApiKey();
+              if (ctx.mounted) Navigator.of(ctx).pop();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('17TRACK API Key saved!')),
+                );
+              }
+            },
+            child: const Text('Save Key'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final acc = widget.userAccount;
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.fromLTRB(18, 16, 18, 110),
         children: [
           Text(
-            AppStrings.tr(lang, 'settings'),
+            AppStrings.tr(widget.lang, 'profile'),
             style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w900),
           ),
           const SizedBox(height: 16),
 
-          // Subscription Plan Card
+          // GOOGLE & EMAIL ACCOUNT BACKUP / SYNC CARD
           Container(
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
                 colors: [ArrivoColors.primaryBlue, ArrivoColors.deepBlue],
               ),
-              borderRadius: BorderRadius.circular(22),
+              borderRadius: BorderRadius.circular(24),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  isPremium
-                      ? 'Arrivo Premium Plan (Unlimited)'
-                      : 'Arrivo Free Plan ($activeCount / 5 Active Packages)',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w800,
+            child: acc == null
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.cloud_upload_rounded,
+                              color: Colors.white, size: 30),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Backup & Sync Your Packages',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Sign in with Google or Email to automatically save, backup, and sync all your tracking numbers.',
+                        style: TextStyle(color: Colors.white70, fontSize: 13.5),
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: ArrivoColors.textDark,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          icon: const Icon(
+                            Icons.g_mobiledata_rounded,
+                            size: 28,
+                            color: ArrivoColors.primaryBlue,
+                          ),
+                          label: const Text(
+                            'Continue with Google',
+                            style: TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          onPressed: _handleGoogleSignIn,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            side: const BorderSide(color: Colors.white54),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          icon: const Icon(Icons.email_outlined),
+                          label: const Text(
+                            'Sign in with Email & Password',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          onPressed: _openEmailAuthDialog,
+                        ),
+                      ),
+                    ],
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 24,
+                            backgroundColor: Colors.white,
+                            child: Text(
+                              acc.displayName.isNotEmpty
+                                  ? acc.displayName[0].toUpperCase()
+                                  : 'U',
+                              style: const TextStyle(
+                                color: ArrivoColors.primaryBlue,
+                                fontWeight: FontWeight.w900,
+                                fontSize: 20,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  acc.displayName,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                Text(
+                                  acc.email,
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Sign Out',
+                            icon: const Icon(Icons.logout_rounded,
+                                color: Colors.white),
+                            onPressed: widget.onSignOut,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.14),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Cloud ID: ${acc.syncId} (${widget.packages.length} saved)',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const Icon(Icons.cloud_done_rounded,
+                                color: Colors.greenAccent, size: 18),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.white,
+                                foregroundColor: ArrivoColors.primaryBlue,
+                              ),
+                              icon: const Icon(Icons.sync_rounded),
+                              label: const Text(
+                                'Backup & Sync Now',
+                                style: TextStyle(fontWeight: FontWeight.w800),
+                              ),
+                              onPressed: () => widget.onAccountSignedIn(acc),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Unlock unlimited tracking, ad-free experience, and family sharing.',
-                  style: TextStyle(color: Colors.white70),
-                ),
-                const SizedBox(height: 12),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: ArrivoColors.primaryBlue,
-                  ),
-                  onPressed: onOpenPaywall,
-                  child: Text(
-                    AppStrings.tr(lang, 'upgrade_premium'),
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                ),
-              ],
+          ),
+
+          const SizedBox(height: 16),
+
+          // Cloud Backup Code Export / Import
+          Card(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            child: ListTile(
+              leading: const Icon(
+                Icons.settings_backup_restore_rounded,
+                color: ArrivoColors.primaryBlue,
+              ),
+              title: const Text('Export / Restore Cloud Backup Code'),
+              subtitle:
+                  const Text('Transfer your packages across phones anytime'),
+              onTap: _openPortableBackupDialog,
             ),
           ),
-          const SizedBox(height: 18),
 
-          // Language Selector (English, French, Arabic with RTL)
+          // In-App 17TRACK API Key Configuration
+          Card(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            child: ListTile(
+              leading: const Icon(
+                Icons.vpn_key_rounded,
+                color: ArrivoColors.primaryBlue,
+              ),
+              title: const Text('17TRACK Live API Key (2,400+ Couriers)'),
+              subtitle: Text(
+                _custom17Key.isNotEmpty ||
+                        TrackingApiService.envApiKey.isNotEmpty
+                    ? 'Connected & Active'
+                    : 'Tap to paste your free 17TRACK API key',
+              ),
+              onTap: _openApiKeyDialog,
+            ),
+          ),
+
+          // Language Selector
           Card(
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -2046,9 +2530,9 @@ class ProfileSettingsTab extends StatelessWidget {
                 Icons.language_rounded,
                 color: ArrivoColors.primaryBlue,
               ),
-              title: Text(AppStrings.tr(lang, 'language')),
+              title: Text(AppStrings.tr(widget.lang, 'language')),
               trailing: DropdownButton<String>(
-                value: lang,
+                value: widget.lang,
                 underline: const SizedBox.shrink(),
                 items: const [
                   DropdownMenuItem(value: 'en', child: Text('English')),
@@ -2056,13 +2540,13 @@ class ProfileSettingsTab extends StatelessWidget {
                   DropdownMenuItem(value: 'ar', child: Text('العربية (RTL)')),
                 ],
                 onChanged: (v) {
-                  if (v != null) onLanguageChanged(v);
+                  if (v != null) widget.onLanguageChanged(v);
                 },
               ),
             ),
           ),
 
-          // Theme Mode Selector (Light, Dark, System)
+          // Theme Mode Selector
           Card(
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -2071,9 +2555,9 @@ class ProfileSettingsTab extends StatelessWidget {
                 Icons.palette_outlined,
                 color: ArrivoColors.primaryBlue,
               ),
-              title: Text(AppStrings.tr(lang, 'theme')),
+              title: Text(AppStrings.tr(widget.lang, 'theme')),
               trailing: DropdownButton<String>(
-                value: themeMode,
+                value: widget.themeMode,
                 underline: const SizedBox.shrink(),
                 items: const [
                   DropdownMenuItem(value: 'light', child: Text('Light')),
@@ -2081,7 +2565,7 @@ class ProfileSettingsTab extends StatelessWidget {
                   DropdownMenuItem(value: 'system', child: Text('System')),
                 ],
                 onChanged: (v) {
-                  if (v != null) onThemeChanged(v);
+                  if (v != null) widget.onThemeChanged(v);
                 },
               ),
             ),
@@ -2096,29 +2580,9 @@ class ProfileSettingsTab extends StatelessWidget {
                 Icons.notifications_active_outlined,
                 color: ArrivoColors.primaryBlue,
               ),
-              title: Text(AppStrings.tr(lang, 'notifications')),
-              value: notificationsEnabled,
-              onChanged: onNotificationsChanged,
-            ),
-          ),
-
-          // Test Notification Button
-          Card(
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-            child: ListTile(
-              leading: const Icon(
-                Icons.send_to_mobile_rounded,
-                color: ArrivoColors.primaryBlue,
-              ),
-              title: Text(AppStrings.tr(lang, 'test_notification')),
-              onTap: () {
-                NotificationService.showNotification(
-                  id: 999,
-                  title: 'Arrivo Package Alert',
-                  body: 'Your Wireless Headphones (#TRK123456789) are arriving soon!',
-                );
-              },
+              title: Text(AppStrings.tr(widget.lang, 'notifications')),
+              value: widget.notificationsEnabled,
+              onChanged: widget.onNotificationsChanged,
             ),
           ),
 
@@ -2131,191 +2595,8 @@ class ProfileSettingsTab extends StatelessWidget {
                 Icons.info_outline_rounded,
                 color: ArrivoColors.primaryBlue,
               ),
-              title: Text(AppStrings.tr(lang, 'about')),
-              onTap: onShowAbout,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 10. PREMIUM PAYWALL SCREEN (Free vs Premium Comparison + Placeholder Payment Button)
-class PremiumPaywallScreen extends StatelessWidget {
-  final bool isPremium;
-  final int activeCount;
-  final VoidCallback onUnlockDemoPremium;
-
-  const PremiumPaywallScreen({
-    super.key,
-    required this.isPremium,
-    required this.activeCount,
-    required this.onUnlockDemoPremium,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: ArrivoColors.primaryBlue,
-        foregroundColor: Colors.white,
-        title: const Text('Arrivo Premium'),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(22),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [ArrivoColors.primaryBlue, ArrivoColors.deepBlue],
-                ),
-                borderRadius: BorderRadius.circular(24),
-              ),
-              child: Column(
-                children: [
-                  const Icon(
-                    Icons.workspace_premium_rounded,
-                    color: Colors.amber,
-                    size: 60,
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    isPremium
-                        ? 'You are on Arrivo Premium!'
-                        : 'Free Plan Limit ($activeCount / 5 Active Packages)',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Upgrade to track unlimited packages across Algeria & worldwide with zero ads and family sharing.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white70),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 22),
-
-            // Comparison Table
-            Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Column(
-                children: [
-                  _CompareRow(
-                    feature: 'Active Packages',
-                    freeVal: 'Up to 5',
-                    proVal: 'Unlimited',
-                  ),
-                  Divider(),
-                  _CompareRow(
-                    feature: 'Local Algerian Carriers',
-                    freeVal: 'Included',
-                    proVal: 'Priority Sync',
-                  ),
-                  Divider(),
-                  _CompareRow(
-                    feature: 'Advertisements',
-                    freeVal: 'Standard',
-                    proVal: '100% Ad-Free',
-                  ),
-                  Divider(),
-                  _CompareRow(
-                    feature: 'Family Sharing',
-                    freeVal: 'No',
-                    proVal: 'Up to 5 Members',
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // Placeholder Payment Button (clearly labeled)
-            SizedBox(
-              width: double.infinity,
-              height: 54,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: ArrivoColors.primaryBlue,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(18),
-                  ),
-                ),
-                icon: const Icon(Icons.lock_open_rounded),
-                label: const Text(
-                  'Unlock Premium (Placeholder Demo - Free)',
-                  style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800),
-                ),
-                onPressed: onUnlockDemoPremium,
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'Note: Real billing (Google Play Billing / BaridiMob / CIB) can be connected later. Tapping the button above unlocks Premium mode for free so you can test unlimited packages right now.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12.5, color: ArrivoColors.textMuted),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CompareRow extends StatelessWidget {
-  final String feature;
-  final String freeVal;
-  final String proVal;
-
-  const _CompareRow({
-    required this.feature,
-    required this.freeVal,
-    required this.proVal,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 2,
-            child: Text(
-              feature,
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                color: ArrivoColors.textDark,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              freeVal,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: ArrivoColors.textMuted),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              proVal,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                color: ArrivoColors.primaryBlue,
-              ),
+              title: Text(AppStrings.tr(widget.lang, 'about')),
+              onTap: widget.onShowAbout,
             ),
           ),
         ],
