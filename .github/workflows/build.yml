@@ -79,7 +79,6 @@ jobs:
           python3 - << 'EOF'
           import os, re, glob
 
-          # 1. Patch AndroidManifest.xml
           manifest_path = "android/app/src/main/AndroidManifest.xml"
           with open(manifest_path, "r", encoding="utf-8") as f:
               manifest = f.read()
@@ -99,9 +98,7 @@ jobs:
           manifest = re.sub(r'android:label="[^"]*"', 'android:label="Arrivo"', manifest)
           with open(manifest_path, "w", encoding="utf-8") as f:
               f.write(manifest)
-          print("Patched AndroidManifest.xml successfully.")
 
-          # 2. Patch build.gradle / build.gradle.kts
           for gradle_path in ["android/app/build.gradle", "android/app/build.gradle.kts"]:
               if os.path.exists(gradle_path):
                   with open(gradle_path, "r", encoding="utf-8") as f:
@@ -112,9 +109,7 @@ jobs:
                   g = re.sub(r'minSdkVersion\s+flutter\.minSdkVersion', 'minSdkVersion 23', g)
                   with open(gradle_path, "w", encoding="utf-8") as f:
                       f.write(g)
-                  print(f"Patched {gradle_path} successfully.")
 
-          # 3. Update MainActivity.kt with Camera Permission, Google Account Picker, URL Launcher, and Notifications
           kt_files = glob.glob("android/app/src/main/kotlin/**/MainActivity.kt", recursive=True)
           if kt_files:
               kt_path = kt_files[0]
@@ -125,13 +120,25 @@ jobs:
 
           import android.accounts.AccountManager
           import android.app.Activity
+          import android.app.Dialog
           import android.app.NotificationChannel
           import android.app.NotificationManager
           import android.content.Context
           import android.content.Intent
           import android.content.pm.PackageManager
+          import android.graphics.Color
           import android.net.Uri
           import android.os.Build
+          import android.view.Gravity
+          import android.view.ViewGroup
+          import android.view.Window
+          import android.webkit.WebChromeClient
+          import android.webkit.WebResourceRequest
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.TextView
           import androidx.core.app.ActivityCompat
           import androidx.core.app.NotificationCompat
           import androidx.core.content.ContextCompat
@@ -176,6 +183,15 @@ jobs:
                                   result.success(null)
                               }}
                           }}
+                          "openInAppTracker" -> {{
+                              val num = call.argument<String>("trackingNumber") ?: ""
+                              val carrier = call.argument<String>("carrierName") ?: "Live Tracker"
+                              val fallbackUrl = call.argument<String>("fallbackUrl") ?: "https://t.17track.net/en#nums=$num"
+                              runOnUiThread {{
+                                  showInAppTrackerDialog(num, carrier, fallbackUrl)
+                              }}
+                              result.success(true)
+                          }}
                           "openExternalUrl" -> {{
                               val url = call.argument<String>("url")
                               if (url != null) {{
@@ -200,6 +216,91 @@ jobs:
                           else -> result.notImplemented()
                       }}
                   }}
+              }}
+
+              private fun showInAppTrackerDialog(trackingNumber: String, carrierName: String, fallbackUrl: String) {{
+                  val dialog = Dialog(this, android.R.style.Theme_DeviceDefault_Light_NoActionBar)
+                  dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+
+                  val root = LinearLayout(this)
+                  root.orientation = LinearLayout.VERTICAL
+                  root.layoutParams = ViewGroup.LayoutParams(
+                      ViewGroup.LayoutParams.MATCH_PARENT,
+                      ViewGroup.LayoutParams.MATCH_PARENT
+                  )
+
+                  val header = LinearLayout(this)
+                  header.orientation = LinearLayout.HORIZONTAL
+                  header.setBackgroundColor(Color.parseColor("#0051FF"))
+                  header.setPadding(36, 28, 36, 28)
+                  header.gravity = Gravity.CENTER_VERTICAL
+
+                  val titleView = TextView(this)
+                  titleView.text = "$carrierName • #$trackingNumber"
+                  titleView.setTextColor(Color.WHITE)
+                  titleView.textSize = 16f
+                  val titleParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                  header.addView(titleView, titleParams)
+
+                  val closeBtn = Button(this)
+                  closeBtn.text = "Close"
+                  closeBtn.setOnClickListener {{ dialog.dismiss() }}
+                  header.addView(closeBtn)
+
+                  val webView = WebView(this)
+                  webView.settings.javaScriptEnabled = true
+                  webView.settings.domStorageEnabled = true
+                  webView.webChromeClient = WebChromeClient()
+                  webView.webViewClient = object : WebViewClient() {{
+                      override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {{
+                          return false
+                      }}
+                  }}
+
+                  val html = \"\"\"
+                      <!DOCTYPE html>
+                      <html>
+                      <head>
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <style>
+                          body {{ font-family: sans-serif; margin: 0; padding: 12px; background: #F3F7FF; }}
+                          .btn {{ display: block; text-align: center; background: #0051FF; color: #fff; padding: 12px; border-radius: 12px; text-decoration: none; font-weight: bold; margin-bottom: 12px; }}
+                        </style>
+                      </head>
+                      <body>
+                        <a class="btn" href="$fallbackUrl">Switch to Official $carrierName Portal</a>
+                        <div id="YQContainer"></div>
+                        <script type="text/javascript" src="https://www.17track.net/externalcall.js"></script>
+                        <script type="text/javascript">
+                          window.onload = function() {{
+                            if (typeof YQV5 !== "undefined") {{
+                              YQV5.trackSingle({{
+                                YQ_ContainerId: "YQContainer",
+                                YQ_Height: 620,
+                                YQ_Fc: "0",
+                                YQ_Lang: "en",
+                                YQ_Num: "$trackingNumber"
+                              }});
+                            }} else {{
+                              window.location.href = "$fallbackUrl";
+                            }}
+                          }};
+                        </script>
+                      </body>
+                      </html>
+                  \"\"\".trimIndent()
+
+                  webView.loadDataWithBaseURL("https://www.17track.net", html, "text/html", "UTF-8", null)
+
+                  root.addView(header)
+                  root.addView(webView, LinearLayout.LayoutParams(
+                      ViewGroup.LayoutParams.MATCH_PARENT,
+                      0,
+                      1f
+                  ))
+
+                  dialog.setContentView(root)
+                  dialog.show()
               }}
 
               override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {{
@@ -244,7 +345,6 @@ jobs:
           """
               with open(kt_path, "w", encoding="utf-8") as f:
                   f.write(kt_code)
-              print(f"Updated {kt_path} successfully.")
           EOF
 
       - name: Install Flutter dependencies
