@@ -1055,7 +1055,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                                 ),
                                 GestureDetector(
                                   onTap: () async {
-                                    await _openAddPackageDialog();
+                                     _openAddPackageDialog();
                                   },
                                   child: Stack(
                                     clipBehavior: Clip.none,
