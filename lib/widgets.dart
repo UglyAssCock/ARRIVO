@@ -13,7 +13,6 @@ class ArrivoColors {
   static const Color textMuted = Color(0xFF63708C);
 }
 
-/// Custom Painter that draws the wavy blue header background matching the design
 class WavyHeaderBackground extends StatelessWidget {
   final Widget child;
   const WavyHeaderBackground({super.key, required this.child});
@@ -67,7 +66,6 @@ class _HeaderWavePainter extends CustomPainter {
 
     canvas.drawPath(mainPath, gradientPaint);
 
-    // Decorative lighter blue wave overlay on top-left
     final wavePaint = Paint()
       ..color = const Color(0xFF2874FF).withOpacity(0.32)
       ..style = PaintingStyle.fill;
@@ -91,7 +89,6 @@ class _HeaderWavePainter extends CustomPainter {
 
     canvas.drawPath(topWave, wavePaint);
 
-    // Subtle globe circle in top-right area
     final globeCenter = Offset(size.width * 0.78, size.height * 0.45);
     final globePaint = Paint()
       ..shader = RadialGradient(
@@ -107,7 +104,6 @@ class _HeaderWavePainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-/// Arrivo Logo with the white "A" + orange swoosh arrow + bold italic "Arrivo"
 class ArrivoLogoHeader extends StatelessWidget {
   final double scale;
   const ArrivoLogoHeader({super.key, this.scale = 1.0});
@@ -147,7 +143,6 @@ class _ArrivoAPainter extends CustomPainter {
       ..color = Colors.white
       ..style = PaintingStyle.fill;
 
-    // Draw stylized 'A'
     final aPath = Path()
       ..moveTo(size.width * 0.45, size.height * 0.06)
       ..lineTo(size.width * 0.66, size.height * 0.06)
@@ -159,7 +154,6 @@ class _ArrivoAPainter extends CustomPainter {
       ..close();
     canvas.drawPath(aPath, whitePaint);
 
-    // Draw orange swoosh arrow across the 'A'
     final orangePaint = Paint()
       ..shader = const LinearGradient(
         colors: [Color(0xFFFFB72B), Color(0xFFFF8008)],
@@ -193,7 +187,6 @@ class _ArrivoAPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-/// 3D Isometric Cardboard Package Box Widget (used in Header and Package Cards)
 class IsometricPackageBox extends StatelessWidget {
   final double size;
   final bool withSpeedLines;
@@ -227,7 +220,6 @@ class _IsometricBoxPainter extends CustomPainter {
     final double h = size.height;
 
     if (withSpeedLines) {
-      // Glowing white orbit arc
       final arcPaint = Paint()
         ..color = Colors.white.withOpacity(0.85)
         ..style = PaintingStyle.stroke
@@ -242,7 +234,6 @@ class _IsometricBoxPainter extends CustomPainter {
       );
       canvas.drawArc(arcRect, -0.3, 3.3, false, arcPaint);
 
-      // 3 white speed streaks on left
       final linePaint = Paint()
         ..color = Colors.white.withOpacity(0.9)
         ..strokeWidth = 4.5
@@ -273,43 +264,30 @@ class _IsometricBoxPainter extends CustomPainter {
     final Offset botCenter = Offset(offsetX + boxW * 0.50, h * 0.92);
     final Offset botRight = Offset(offsetX + boxW * 0.88, h * 0.74);
 
-    // Top face
     final topFace = Path()
       ..moveTo(topCenter.dx, topCenter.dy)
       ..lineTo(topRight.dx, topRight.dy)
       ..lineTo(midCenter.dx, midCenter.dy)
       ..lineTo(topLeft.dx, topLeft.dy)
       ..close();
-    canvas.drawPath(
-      topFace,
-      Paint()..color = const Color(0xFFFFCA7A),
-    );
+    canvas.drawPath(topFace, Paint()..color = const Color(0xFFFFCA7A));
 
-    // Left face
     final leftFace = Path()
       ..moveTo(topLeft.dx, topLeft.dy)
       ..lineTo(midCenter.dx, midCenter.dy)
       ..lineTo(botCenter.dx, botCenter.dy)
       ..lineTo(botLeft.dx, botLeft.dy)
       ..close();
-    canvas.drawPath(
-      leftFace,
-      Paint()..color = const Color(0xFFE58C2E),
-    );
+    canvas.drawPath(leftFace, Paint()..color = const Color(0xFFE58C2E));
 
-    // Right face
     final rightFace = Path()
       ..moveTo(midCenter.dx, midCenter.dy)
       ..lineTo(topRight.dx, topRight.dy)
       ..lineTo(botRight.dx, botRight.dy)
       ..lineTo(botCenter.dx, botCenter.dy)
       ..close();
-    canvas.drawPath(
-      rightFace,
-      Paint()..color = const Color(0xFFF6A446),
-    );
+    canvas.drawPath(rightFace, Paint()..color = const Color(0xFFF6A446));
 
-    // Brown packing tape across top & right side
     final tapePaint = Paint()..color = const Color(0xFFB56014);
     final tapePath = Path()
       ..moveTo(offsetX + boxW * 0.27, h * 0.19)
@@ -321,7 +299,6 @@ class _IsometricBoxPainter extends CustomPainter {
       ..close();
     canvas.drawPath(tapePath, tapePaint);
 
-    // White barcode label on right face
     final labelPath = Path()
       ..moveTo(offsetX + boxW * 0.57, h * 0.63)
       ..lineTo(offsetX + boxW * 0.77, h * 0.54)
@@ -330,7 +307,6 @@ class _IsometricBoxPainter extends CustomPainter {
       ..close();
     canvas.drawPath(labelPath, Paint()..color = Colors.white);
 
-    // Barcode lines
     final barPaint = Paint()
       ..color = const Color(0xFF333333)
       ..strokeWidth = 1.4;
@@ -345,7 +321,6 @@ class _IsometricBoxPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-/// Quick-Action Tile matching the 4 tiles on the Home Screen
 class QuickActionTile extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -404,7 +379,7 @@ class QuickActionTile extends StatelessWidget {
   }
 }
 
-/// Package Card matching the screenshot (box thumbnail, title, #TRK, In Transit chip, and 4-step vertical timeline)
+/// Displays a real package card with actual events fetched from the courier
 class PackageTimelineCard extends StatelessWidget {
   final PackageItem package;
   final String lang;
@@ -424,6 +399,7 @@ class PackageTimelineCard extends StatelessWidget {
       case PackageStatus.delivered:
         return AppStrings.tr(lang, 'delivered');
       case PackageStatus.arrivingSoon:
+        return AppStrings.tr(lang, 'arriving_soon');
       case PackageStatus.inTransit:
         return AppStrings.tr(lang, 'in_transit');
       case PackageStatus.pickedUp:
@@ -437,22 +413,12 @@ class PackageTimelineCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final isDelivered = package.status == PackageStatus.delivered;
-    final isArrivingSoon = package.status == PackageStatus.arrivingSoon;
+    final carrier = CarrierRegistry.byId(package.carrierId);
 
-    final pickedUpEvent = package.events.isNotEmpty
-        ? package.events.first
-        : const TrackingEvent(
-            title: 'Package picked up',
-            timestamp: 'Oct 29, 2026 • 10:24 AM',
-            location: 'Sorting Hub',
-          );
-    final transitEvent = package.events.length > 1
-        ? package.events[1]
-        : const TrackingEvent(
-            title: 'In transit',
-            timestamp: 'Oct 30, 2026 • 02:17 PM',
-            location: 'Regional Hub',
-          );
+    // Take up to the latest 3 real events to display on the card timeline
+    final recentEvents = package.events.length > 3
+        ? package.events.sublist(package.events.length - 3)
+        : package.events;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -475,7 +441,6 @@ class PackageTimelineCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Card Header: Box image + Name & Number & Chip + 3-dots menu
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -509,10 +474,10 @@ class PackageTimelineCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          '#${package.trackingNumber}',
+                          '#${package.trackingNumber} • ${carrier.name}',
                           style: const TextStyle(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w500,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
                             color: ArrivoColors.textMuted,
                           ),
                         ),
@@ -565,6 +530,24 @@ class PackageTimelineCard extends StatelessWidget {
                     onSelected: onMenuAction,
                     itemBuilder: (context) => const [
                       PopupMenuItem(
+                        value: 'refresh',
+                        child: ListTile(
+                          leading: Icon(Icons.refresh_rounded),
+                          title: Text('Refresh Live Status'),
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: 'live_web',
+                        child: ListTile(
+                          leading: Icon(Icons.open_in_browser_rounded),
+                          title: Text('Open Courier Tracker'),
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                        ),
+                      ),
+                      PopupMenuItem(
                         value: 'rename',
                         child: ListTile(
                           leading: Icon(Icons.edit_outlined),
@@ -608,47 +591,30 @@ class PackageTimelineCard extends StatelessWidget {
               ),
               const SizedBox(height: 16),
 
-              // Step 1: Package picked up
-              _TimelineStepRow(
-                isDone: true,
-                isPinHighlighted: false,
-                showBottomLine: true,
-                lineActive: true,
-                title: AppStrings.tr(lang, 'picked_up'),
-                subtitle: pickedUpEvent.timestamp,
-              ),
+              // Real Tracking Events Timeline
+              for (int i = 0; i < recentEvents.length; i++)
+                _TimelineStepRow(
+                  isDone: i < recentEvents.length - 1 || isDelivered,
+                  isPinHighlighted:
+                      i == recentEvents.length - 1 && !isDelivered,
+                  showBottomLine: i < recentEvents.length - 1 || !isDelivered,
+                  lineActive: i < recentEvents.length - 1,
+                  title: recentEvents[i].title,
+                  subtitle:
+                      '${recentEvents[i].timestamp} • ${recentEvents[i].location}',
+                  highlightBanner:
+                      i == recentEvents.length - 1 && !isDelivered,
+                ),
 
-              // Step 2: In transit
-              _TimelineStepRow(
-                isDone: isArrivingSoon || isDelivered,
-                isPinHighlighted: !isArrivingSoon && !isDelivered,
-                showBottomLine: true,
-                lineActive: isArrivingSoon || isDelivered,
-                title: AppStrings.tr(lang, 'in_transit'),
-                subtitle: transitEvent.timestamp,
-              ),
-
-              // Step 3: Arriving soon (Highlighted Pin + Blue Banner Card)
-              _TimelineStepRow(
-                isDone: isDelivered,
-                isPinHighlighted: !isDelivered,
-                showBottomLine: true,
-                lineActive: isDelivered,
-                title: AppStrings.tr(lang, 'arriving_soon'),
-                subtitle: 'Expected: ${package.eta}',
-                highlightBanner: !isDelivered,
-              ),
-
-              // Step 4: Delivered
-              _TimelineStepRow(
-                isDone: isDelivered,
-                isPinHighlighted: false,
-                showBottomLine: false,
-                lineActive: false,
-                title: AppStrings.tr(lang, 'delivered'),
-                subtitle: isDelivered ? package.eta : null,
-                isGreyPending: !isDelivered,
-              ),
+              if (!isDelivered)
+                _TimelineStepRow(
+                  isDone: false,
+                  isPinHighlighted: false,
+                  showBottomLine: false,
+                  lineActive: false,
+                  title: AppStrings.tr(lang, 'delivered'),
+                  isGreyPending: true,
+                ),
             ],
           ),
         ),
@@ -780,17 +746,17 @@ class _TimelineStepRow extends StatelessWidget {
                                 Text(
                                   title,
                                   style: const TextStyle(
-                                    fontSize: 15,
+                                    fontSize: 14.5,
                                     fontWeight: FontWeight.w800,
                                     color: ArrivoColors.primaryBlue,
                                   ),
                                 ),
                                 if (subtitle != null) ...[
-                                  const SizedBox(height: 2),
+                                  const SizedBox(height: 3),
                                   Text(
                                     subtitle!,
                                     style: const TextStyle(
-                                      fontSize: 12.5,
+                                      fontSize: 12,
                                       fontWeight: FontWeight.w600,
                                       color: ArrivoColors.primaryBlue,
                                     ),
@@ -799,10 +765,11 @@ class _TimelineStepRow extends StatelessWidget {
                               ],
                             ),
                           ),
+                          const SizedBox(width: 8),
                           const Icon(
                             Icons.local_shipping_rounded,
                             color: ArrivoColors.primaryBlue,
-                            size: 28,
+                            size: 26,
                           ),
                         ],
                       ),
@@ -814,7 +781,7 @@ class _TimelineStepRow extends StatelessWidget {
                         Text(
                           title,
                           style: TextStyle(
-                            fontSize: 15,
+                            fontSize: 14.5,
                             fontWeight: isGreyPending
                                 ? FontWeight.w500
                                 : FontWeight.w700,
@@ -830,7 +797,7 @@ class _TimelineStepRow extends StatelessWidget {
                           Text(
                             subtitle!,
                             style: const TextStyle(
-                              fontSize: 13,
+                              fontSize: 12.5,
                               color: ArrivoColors.textMuted,
                             ),
                           ),
@@ -845,7 +812,6 @@ class _TimelineStepRow extends StatelessWidget {
   }
 }
 
-/// Loading Skeleton Widget shown while fetching tracking status
 class PackageSkeletonLoader extends StatelessWidget {
   const PackageSkeletonLoader({super.key});
 
