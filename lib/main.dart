@@ -247,7 +247,6 @@ class _ArrivoAppState extends State<ArrivoApp> with WidgetsBindingObserver {
   }
 }
 
-/// ONBOARDING SCREEN
 class OnboardingScreen extends StatefulWidget {
   final String lang;
   final ValueChanged<String> onLanguageChanged;
@@ -476,7 +475,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 }
 
-/// MAIN NAVIGATION SHELL
 class MainNavigationShell extends StatefulWidget {
   final List<PackageItem> packages;
   final UserAccount? userAccount;
@@ -803,7 +801,11 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
   void _openLiveCourierWeb(PackageItem pkg) {
     final carrier = CarrierRegistry.byId(pkg.carrierId);
     final url = carrier.buildLiveTrackingUrl(pkg.trackingNumber);
-    NotificationService.openExternalUrl(url);
+    NotificationService.openInAppLiveTracker(
+      trackingNumber: pkg.trackingNumber,
+      carrierName: carrier.name,
+      fallbackUrl: url,
+    );
   }
 
   void _handleCardMenuAction(PackageItem pkg, String action) {
@@ -907,12 +909,12 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Arrivo v2.0.0 (com.arrivo.app)',
+              'Arrivo v2.1.0 (com.arrivo.app)',
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
             SizedBox(height: 8),
             Text(
-              'Live tracking for 2,400+ local Algerian & global couriers including Yalidine, ZR Express, Maystro, Guepex, Algérie Poste/EMS, Cainiao/AliExpress, DHL, UPS, FedEx, Aramex, Temu, and Shein.\n\nIncludes Google & Email Account Sync and Barcode Scanner.',
+              'Built-in live tracking for 3,400+ local Algerian & global couriers including Yalidine, ZR Express, Maystro, Guepex, Algérie Poste/EMS, Cainiao/AliExpress, DHL, UPS, FedEx, Aramex, Temu, and Shein.\n\nIncludes Google & Email Account Sync and Barcode Scanner.',
             ),
           ],
         ),
@@ -1026,7 +1028,6 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                                 ],
                               ),
                             ),
-                            // Cloud Sync Status Button + Notification Bell
                             Row(
                               children: [
                                 GestureDetector(
@@ -1054,8 +1055,8 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                                   ),
                                 ),
                                 GestureDetector(
-                                  onTap: () async {
-                                     _openAddPackageDialog();
+                                  onTap: () {
+                                    _openAddPackageDialog();
                                   },
                                   child: Stack(
                                     clipBehavior: Clip.none,
@@ -1404,7 +1405,6 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
   }
 }
 
-/// PACKAGE LIST SCREEN WITH TABS & SEARCH
 class TrackPackagesTab extends StatefulWidget {
   final List<PackageItem> packages;
   final String lang;
@@ -1531,7 +1531,6 @@ class _TrackPackagesTabState extends State<TrackPackagesTab> {
   }
 }
 
-/// HISTORY SCREEN
 class HistoryPackagesTab extends StatelessWidget {
   final List<PackageItem> packages;
   final String lang;
@@ -1596,7 +1595,6 @@ class HistoryPackagesTab extends StatelessWidget {
   }
 }
 
-/// PACKAGE DETAILS SCREEN WITH LIVE COURIER VERIFICATION & REFRESH
 class PackageDetailsScreen extends StatelessWidget {
   final PackageItem package;
   final String lang;
@@ -1702,9 +1700,9 @@ class PackageDetailsScreen extends StatelessWidget {
                           borderRadius: BorderRadius.circular(14),
                         ),
                       ),
-                      icon: const Icon(Icons.open_in_new_rounded),
+                      icon: const Icon(Icons.radar_rounded),
                       label: Text(
-                        'Open Live Courier Tracker (${carrier.name})',
+                        'Live Courier Scanner (${carrier.name})',
                         style: const TextStyle(fontWeight: FontWeight.w800),
                       ),
                       onPressed: onOpenLiveWeb,
@@ -1820,7 +1818,6 @@ class PackageDetailsScreen extends StatelessWidget {
   }
 }
 
-/// FIXED CAMERA BARCODE & QR SCANNER SCREEN
 class BarcodeScannerScreen extends StatefulWidget {
   const BarcodeScannerScreen({super.key});
 
@@ -1954,7 +1951,6 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   }
 }
 
-/// PROFILE, GOOGLE/EMAIL ACCOUNT SYNC & SETTINGS SCREEN
 class ProfileSettingsTab extends StatefulWidget {
   final UserAccount? userAccount;
   final List<PackageItem> packages;
@@ -1993,21 +1989,8 @@ class _ProfileSettingsTabState extends State<ProfileSettingsTab> {
   final TextEditingController _emailCtrl = TextEditingController();
   final TextEditingController _passwordCtrl = TextEditingController();
   final TextEditingController _nameCtrl = TextEditingController();
-  String _custom17Key = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _loadApiKey();
-  }
-
-  Future<void> _loadApiKey() async {
-    final k = await StorageService.loadCustom17TrackKey();
-    if (mounted) setState(() => _custom17Key = k);
-  }
 
   Future<void> _handleGoogleSignIn() async {
-    // Try native Android Google Account Picker first
     String? pickedEmail = await NotificationService.pickGoogleAccount();
     if (pickedEmail == null || pickedEmail.trim().isEmpty) {
       if (!mounted) return;
@@ -2246,53 +2229,6 @@ class _ProfileSettingsTabState extends State<ProfileSettingsTab> {
     );
   }
 
-  void _openApiKeyDialog() {
-    final ctrl = TextEditingController(text: _custom17Key);
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('17TRACK Live API Key'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Paste your free 17TRACK API key to enable automatic background checkpoints for all 2,400+ couriers (or leave blank to use Cainiao Global & Direct Live Courier tracking):',
-              style: TextStyle(fontSize: 13),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: ctrl,
-              decoration: const InputDecoration(
-                labelText: '17TRACK API Token',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              await StorageService.saveCustom17TrackKey(ctrl.text);
-              await _loadApiKey();
-              if (ctx.mounted) Navigator.of(ctx).pop();
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('17TRACK API Key saved!')),
-                );
-              }
-            },
-            child: const Text('Save Key'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final acc = widget.userAccount;
@@ -2305,8 +2241,6 @@ class _ProfileSettingsTabState extends State<ProfileSettingsTab> {
             style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w900),
           ),
           const SizedBox(height: 16),
-
-          // GOOGLE & EMAIL ACCOUNT BACKUP / SYNC CARD
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
@@ -2482,10 +2416,7 @@ class _ProfileSettingsTabState extends State<ProfileSettingsTab> {
                     ],
                   ),
           ),
-
           const SizedBox(height: 16),
-
-          // Cloud Backup Code Export / Import
           Card(
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -2500,28 +2431,18 @@ class _ProfileSettingsTabState extends State<ProfileSettingsTab> {
               onTap: _openPortableBackupDialog,
             ),
           ),
-
-          // In-App 17TRACK API Key Configuration
           Card(
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-            child: ListTile(
-              leading: const Icon(
-                Icons.vpn_key_rounded,
-                color: ArrivoColors.primaryBlue,
+            child: const ListTile(
+              leading: Icon(
+                Icons.verified_rounded,
+                color: Colors.green,
               ),
-              title: const Text('17TRACK Live API Key (2,400+ Couriers)'),
-              subtitle: Text(
-                _custom17Key.isNotEmpty ||
-                        TrackingApiService.envApiKey.isNotEmpty
-                    ? 'Connected & Active'
-                    : 'Tap to paste your free 17TRACK API key',
-              ),
-              onTap: _openApiKeyDialog,
+              title: Text('Multi-Carrier Live Engine (3,400+ Couriers)'),
+              subtitle: Text('Built-in & Active Automatically'),
             ),
           ),
-
-          // Language Selector
           Card(
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -2545,8 +2466,6 @@ class _ProfileSettingsTabState extends State<ProfileSettingsTab> {
               ),
             ),
           ),
-
-          // Theme Mode Selector
           Card(
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -2570,8 +2489,6 @@ class _ProfileSettingsTabState extends State<ProfileSettingsTab> {
               ),
             ),
           ),
-
-          // Push Notification Toggle
           Card(
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -2585,8 +2502,6 @@ class _ProfileSettingsTabState extends State<ProfileSettingsTab> {
               onChanged: widget.onNotificationsChanged,
             ),
           ),
-
-          // About Button
           Card(
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
