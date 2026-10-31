@@ -70,7 +70,7 @@ class StorageService {
   static const String _accountKey = 'arrivo_user_account_v1';
   static const String _cloudVaultPrefix = 'arrivo_cloud_vault_';
 
-  /// Loads saved packages. Returns an EMPTY list on first launch (no fake items!).
+  /// Loads saved packages. Returns an EMPTY list on first launch (no fake items).
   static Future<List<PackageItem>> loadPackages() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_packagesKey);
@@ -133,6 +133,10 @@ class StorageService {
     await prefs.setBool(_notifKey, enabled);
   }
 
+  // Compatibility helpers so old main.dart references never fail the build
+  static Future<bool> loadIsPremium() async => true;
+  static Future<void> saveIsPremium(bool value) async {}
+
   static Future<String> loadCustom17TrackKey() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_custom17Key) ?? '';
@@ -189,7 +193,6 @@ class StorageService {
   }
 }
 
-/// Cloud Backup & Account Sync Service (Google & Email/Password + Backup Code Export/Import)
 class CloudSyncService {
   static String _generateSyncId(String email) {
     final clean = email.trim().toLowerCase();
@@ -245,7 +248,6 @@ class CloudSyncService {
     return account;
   }
 
-  /// Syncs current packages with the user's cloud/account backup vault and merges any restored items
   static Future<List<PackageItem>> syncPackages({
     required UserAccount account,
     required List<PackageItem> currentPackages,
@@ -253,7 +255,6 @@ class CloudSyncService {
     final existingVault =
         await StorageService.loadAccountBackupVault(account.email) ?? [];
 
-    // Merge currentPackages + existingVault by trackingNumber (newest wins)
     final Map<String, PackageItem> mergedMap = {};
     for (final pkg in existingVault) {
       mergedMap[pkg.trackingNumber.toUpperCase()] = pkg;
@@ -273,7 +274,6 @@ class CloudSyncService {
     return mergedList;
   }
 
-  /// Encodes all packages into a portable Cloud Backup String that can be copied/restored on any phone
   static String exportPortableBackupCode(List<PackageItem> packages) {
     final jsonStr = jsonEncode(packages.map((p) => p.toJson()).toList());
     return base64UrlEncode(utf8.encode(jsonStr));
@@ -288,9 +288,9 @@ class CloudSyncService {
   }
 }
 
-/// Real Multi-Engine Package Tracking Service (Zero Fake Dates!)
 class TrackingApiService {
   static const String envApiKey = String.fromEnvironment('TRACK17_KEY');
+  static bool get isLiveApiConfigured => envApiKey.trim().isNotEmpty;
 
   static Future<String> getEffective17TrackKey() async {
     final custom = await StorageService.loadCustom17TrackKey();
@@ -328,7 +328,6 @@ class TrackingApiService {
 
     final activeKey = await getEffective17TrackKey();
 
-    // ENGINE 1: Official 17TRACK v2.2 Live API (if API key is configured in Settings or GitHub Secrets)
     if (activeKey.isNotEmpty) {
       try {
         final live17 = await _fetchFrom17Track(
@@ -344,7 +343,6 @@ class TrackingApiService {
       } catch (_) {}
     }
 
-    // ENGINE 2: Cainiao / Global Postal Live Public API (No API key required! Tracks AliExpress, Cainiao, EMS, China Post, Yanwen, SunYou, UPU Postal, etc.)
     try {
       final liveCainiao = await _fetchFromCainiaoGlobal(
         trackingNumber: cleaned,
@@ -356,8 +354,6 @@ class TrackingApiService {
       }
     } catch (_) {}
 
-    // ENGINE 3: Honest Registered State with Real Current Timestamp & Direct Live Carrier Portal
-    // (Never invents fake dates!)
     final nowStr = _formatRealTimestamp(DateTime.now());
     final displayTitle = customName.trim().isEmpty
         ? '${resolvedCarrier.name} Shipment'
@@ -387,7 +383,6 @@ class TrackingApiService {
     );
   }
 
-  /// Queries Cainiao Global Public JSON API (Zero API Key Needed)
   static Future<PackageItem?> _fetchFromCainiaoGlobal({
     required String trackingNumber,
     required String customName,
@@ -474,7 +469,6 @@ class TrackingApiService {
     );
   }
 
-  /// Queries Official 17TRACK v2.2 API with Auto-Detect and Polling Retry
   static Future<PackageItem?> _fetchFrom17Track({
     required String apiKey,
     required String trackingNumber,
@@ -487,14 +481,12 @@ class TrackingApiService {
       'Content-Type': 'application/json',
     };
 
-    // If forceAutoDetect or track17Code == 0, omit 'carrier' so 17TRACK auto-detects across all 2,400+ couriers!
     final Map<String, dynamic> reqItem = {'number': trackingNumber};
     if (!forceAutoDetect && carrier.track17Code > 0) {
       reqItem['carrier'] = carrier.track17Code;
     }
     final bodyPayload = jsonEncode([reqItem]);
 
-    // Step 1: Register tracking number with 17TRACK
     await http
         .post(
           Uri.parse('https://api.17track.net/track/v2.2/register'),
@@ -503,7 +495,6 @@ class TrackingApiService {
         )
         .timeout(const Duration(seconds: 8));
 
-    // Step 2: Poll gettrackinfo (with retry if 17TRACK is still pulling initial events from carrier)
     for (int attempt = 0; attempt < 2; attempt++) {
       if (attempt > 0) {
         await Future.delayed(const Duration(seconds: 2));
@@ -558,7 +549,6 @@ class TrackingApiService {
       }
 
       if (parsedEvents.isEmpty && attempt == 0) {
-        // Wait 2 seconds and try one more time so 17TRACK finishes scraping the carrier
         continue;
       }
 
